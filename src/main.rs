@@ -6,6 +6,7 @@ mod analysis;
 mod graph;
 mod cache;
 mod middleware;
+mod auth;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -71,10 +72,12 @@ async fn main() -> anyhow::Result<()> {
     
     info!("✅ Cache manager initialized");
     
-    // Log security configuration
-    if config.enable_auth {
+    // Initialize authentication with API keys
+    if config.enable_auth && !config.api_keys.is_empty() {
+        auth::init_api_keys(config.api_keys.clone());
         info!("🔒 API authentication enabled ({} keys)", config.api_keys.len());
     } else {
+        auth::init_api_keys(vec![]); // Empty = auth disabled
         tracing::warn!("⚠️  API authentication disabled - not recommended for production!");
     }
     info!("🚦 Rate limiting: {} requests/minute (unauthenticated)", config.rate_limit_per_minute);

@@ -12,7 +12,8 @@ use crate::core::config::Config;
 use crate::database::storage::Database;
 use crate::analysis::AnalysisEngine;
 use crate::cache::CacheManager;
-use crate::middleware::{ApiKeyAuth, RateLimiter, RateLimiterConfig, RequestId};
+use crate::middleware::{RateLimiter, RateLimiterConfig, RequestId};
+use crate::auth::ApiKey;
 
 /// API server state
 pub struct ApiState {
@@ -41,17 +42,11 @@ pub async fn start_server(
 
     info!("🌐 Starting REST API server on {}:{}", host, port);
 
-    // Configure middleware (authentication & rate limiting)
+    // Configure middleware (rate limiting and request tracking)
     let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
         requests_per_minute: config.rate_limit_per_minute,
         burst_size: 10,
     });
-
-    let api_keys = if config.enable_auth {
-        config.api_keys.clone()
-    } else {
-        vec![] // Empty keys = auth disabled
-    };
 
     HttpServer::new(move || {
         App::new()
@@ -60,8 +55,8 @@ pub async fn start_server(
             .wrap(middleware::Compress::default())
             .wrap(RequestId::new())
             .wrap(rate_limiter.clone())
-            .wrap(ApiKeyAuth::new(api_keys.clone()))
-            // Health check endpoints
+            // Note: Authentication is now handled via extractors in individual handlers
+            // Health check endpoints (public - no auth required)
             .route("/health", web::get().to(handlers::health_check))
             .route("/status", web::get().to(handlers::get_status))
             // Wallet analysis endpoints
@@ -212,7 +207,9 @@ pub mod handlers {
     }
 
     /// Analyze wallet (POST with options)
+    /// Requires authentication when enabled
     pub async fn analyze_wallet_post(
+        _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         req: web::Json<AnalyzeWalletRequest>,
     ) -> HttpResponse {
@@ -245,7 +242,9 @@ pub mod handlers {
     }
 
     /// Get wallet risk score
+    /// Requires authentication when enabled
     pub async fn get_wallet_risk(
+        _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         address: web::Path<String>,
     ) -> HttpResponse {
@@ -310,7 +309,9 @@ pub mod handlers {
     }
 
     /// Find side wallets
+    /// Requires authentication when enabled
     pub async fn find_side_wallets(
+        _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         address: web::Path<String>,
     ) -> HttpResponse {
@@ -327,7 +328,9 @@ pub mod handlers {
     }
 
     /// Get wallet cluster
+    /// Requires authentication when enabled
     pub async fn get_wallet_cluster(
+        _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         address: web::Path<String>,
     ) -> HttpResponse {
@@ -343,7 +346,9 @@ pub mod handlers {
     }
 
     /// Trace funds
+    /// Requires authentication when enabled
     pub async fn trace_funds(
+        _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         req: web::Json<TraceFundsRequest>,
     ) -> HttpResponse {
@@ -371,7 +376,9 @@ pub mod handlers {
     }
 
     /// Detect patterns
+    /// Requires authentication when enabled
     pub async fn detect_patterns(
+        _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         req: web::Json<DetectPatternRequest>,
     ) -> HttpResponse {
@@ -395,7 +402,9 @@ pub mod handlers {
     }
 
     /// Detect wash trading
+    /// Requires authentication when enabled
     pub async fn detect_wash_trading(
+        _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         address: web::Path<String>,
     ) -> HttpResponse {
@@ -430,7 +439,9 @@ pub mod handlers {
     }
 
     /// Network analysis
+    /// Requires authentication when enabled
     pub async fn network_analysis(
+        _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         req: web::Json<NetworkAnalysisRequest>,
     ) -> HttpResponse {
