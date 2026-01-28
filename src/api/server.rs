@@ -14,6 +14,7 @@ use crate::analysis::AnalysisEngine;
 use crate::cache::CacheManager;
 use crate::middleware::{RateLimiter, RateLimiterConfig, RequestId};
 use crate::auth::ApiKey;
+use crate::modules::TransactionHandler;
 
 /// API server state
 pub struct ApiState {
@@ -21,6 +22,7 @@ pub struct ApiState {
     pub database: Arc<RwLock<Database>>,
     pub analysis_engine: Arc<RwLock<AnalysisEngine>>,
     pub cache: Arc<CacheManager>,
+    pub transaction_handler: Arc<RwLock<TransactionHandler>>,
 }
 
 /// Start the REST API server
@@ -33,11 +35,16 @@ pub async fn start_server(
     host: &str,
     port: u16,
 ) -> std::io::Result<()> {
+    let transaction_handler = Arc::new(RwLock::new(
+        TransactionHandler::new(Arc::clone(&rpc_client))
+    ));
+
     let state = web::Data::new(ApiState {
         rpc_client,
         database,
         analysis_engine,
         cache,
+        transaction_handler: Arc::clone(&transaction_handler),
     });
 
     info!("🌐 Starting REST API server on {}:{}", host, port);
@@ -49,15 +56,22 @@ pub async fn start_server(
     });
 
     HttpServer::new(move || {
-        App::new()
+        let mut app = App::new()
             .app_data(state.clone())
+            .app_data(web::Data::new(Arc::clone(&transaction_handler)))
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
             .wrap(RequestId::new())
-            .wrap(rate_limiter.clone())
+            .wrap(rate_limiter.clone());
+
+        // Configure transaction parsing routes
+        app = app.configure(crate::api::parse_routes::configure);
+
+        app
             // Note: Authentication is now handled via extractors in individual handlers
             // Health check endpoints (public - no auth required)
             .route("/health", web::get().to(handlers::health_check))
+
             .route("/status", web::get().to(handlers::get_status))
             // Wallet analysis endpoints
             .route("/api/v1/analyze/wallet/{address}", web::get().to(handlers::analyze_wallet))
