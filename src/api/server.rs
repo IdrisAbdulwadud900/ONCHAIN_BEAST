@@ -74,6 +74,9 @@ pub async fn start_server(
 
         // Configure transaction parsing routes
         app = app.configure(crate::api::parse_routes::configure);
+        
+        // Configure analysis routes
+        app = app.configure(crate::api::analysis_routes::configure);
 
         app
             // Note: Authentication is now handled via extractors in individual handlers
