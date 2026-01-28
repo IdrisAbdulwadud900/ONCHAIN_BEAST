@@ -1,0 +1,303 @@
+/// Solana RPC Client wrapper for blockchain interactions
+use crate::core::errors::{BeastError, Result};
+use serde::Deserialize;
+
+#[derive(Clone)]
+pub struct SolanaRpcClient {
+    endpoint: String,
+    http_client: reqwest::Client,
+}
+
+impl SolanaRpcClient {
+    pub fn new(endpoint: String) -> Self {
+        SolanaRpcClient {
+            endpoint,
+            http_client: reqwest::Client::new(),
+        }
+    }
+
+    /// Get account information from Solana blockchain
+    pub async fn get_account_info(&self, address: &str) -> Result<AccountInfo> {
+        // Validate Solana address format
+        if address.len() != 44 && address.len() != 32 {
+            return Err(BeastError::InvalidAddress(format!(
+                "Invalid Solana address length: {}",
+                address.len()
+            )));
+        }
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [address, { "encoding": "jsonParsed" }]
+        });
+
+        match self.http_client.post(&self.endpoint)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) => match response.json::<RpcResponse<AccountData>>().await {
+                Ok(rpc_response) => {
+                    if let Some(data) = rpc_response.result {
+                        Ok(AccountInfo {
+                            address: address.to_string(),
+                            balance: data.value.lamports,
+                            owner: data.value.owner,
+                            executable: data.value.executable,
+                            rent_epoch: data.value.rent_epoch,
+                        })
+                    } else {
+                        Err(BeastError::RpcError("Account not found".to_string()))
+                    }
+                }
+                Err(e) => Err(BeastError::RpcError(format!(
+                    "Failed to parse account info response: {}",
+                    e
+                ))),
+            },
+            Err(e) => Err(BeastError::RpcError(format!(
+                "Failed to get account info: {}",
+                e
+            ))),
+        }
+    }
+
+    /// Get transaction signatures for a wallet
+    pub async fn get_signatures(
+        &self,
+        address: &str,
+        limit: u64,
+    ) -> Result<Vec<TransactionSignature>> {
+        // Validate Solana address format
+        if address.len() != 44 && address.len() != 32 {
+            return Err(BeastError::InvalidAddress(format!(
+                "Invalid Solana address length: {}",
+                address.len()
+            )));
+        }
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getSignaturesForAddress",
+            "params": [address, { "limit": limit.min(1000) }]
+        });
+
+        match self.http_client.post(&self.endpoint)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) => match response.json::<RpcResponse<Vec<SignatureData>>>().await {
+                Ok(rpc_response) => {
+                    if let Some(sigs) = rpc_response.result {
+                        let signatures = sigs
+                            .into_iter()
+                            .map(|sig_data| TransactionSignature {
+                                signature: sig_data.signature,
+                                slot: sig_data.slot,
+                                block_time: sig_data.block_time.unwrap_or(0),
+                                memo: sig_data.memo,
+                            })
+                            .collect();
+                        Ok(signatures)
+                    } else {
+                        Ok(vec![])
+                    }
+                }
+                Err(e) => Err(BeastError::RpcError(format!(
+                    "Failed to parse signatures response: {}",
+                    e
+                ))),
+            },
+            Err(e) => Err(BeastError::RpcError(format!(
+                "Failed to get signatures: {}",
+                e
+            ))),
+        }
+    }
+
+    /// Get full transaction details
+    pub async fn get_transaction(&self, signature: &str) -> Result<RpcTransaction> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTransaction",
+            "params": [
+                signature,
+                {
+                    "encoding": "json",
+                    "maxSupportedTransactionVersion": 0
+                }
+            ]
+        });
+
+        match self.http_client.post(&self.endpoint)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) => match response.json::<RpcResponse<TransactionData>>().await {
+                Ok(rpc_response) => {
+                    if let Some(tx_data) = rpc_response.result {
+                        Ok(RpcTransaction {
+                            signature: signature.to_string(),
+                            block_time: tx_data.block_time.unwrap_or(0),
+                            slot: tx_data.slot,
+                        })
+                    } else {
+                        Err(BeastError::RpcError("Transaction not found".to_string()))
+                    }
+                }
+                Err(e) => Err(BeastError::RpcError(format!(
+                    "Failed to parse transaction response: {}",
+                    e
+                ))),
+            },
+            Err(e) => Err(BeastError::RpcError(format!(
+                "Failed to get transaction: {}",
+                e
+            ))),
+        }
+    }
+
+    /// Check if RPC endpoint is healthy
+    pub async fn health_check(&self) -> Result<bool> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getHealth"
+        });
+
+        match self.http_client.post(&self.endpoint)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) => match response.json::<serde_json::Value>().await {
+                Ok(value) => {
+                    let result = value.get("result").and_then(|r| r.as_str());
+                    Ok(result == Some("ok"))
+                }
+                Err(_) => Ok(false),
+            },
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Get current cluster info
+    pub async fn get_cluster_info(&self) -> Result<ClusterInfo> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getClusterNodes"
+        });
+
+        match self.http_client.post(&self.endpoint)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) => match response.json::<RpcResponse<Vec<NodeInfo>>>().await {
+                Ok(rpc_response) => {
+                    let nodes = rpc_response.result.unwrap_or_default();
+                    Ok(ClusterInfo {
+                        total_nodes: nodes.len() as u64,
+                        endpoint: self.endpoint.clone(),
+                    })
+                }
+                Err(e) => Err(BeastError::RpcError(format!(
+                    "Failed to parse cluster info: {}",
+                    e
+                ))),
+            },
+            Err(e) => Err(BeastError::RpcError(format!(
+                "Failed to get cluster info: {}",
+                e
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountInfo {
+    pub address: String,
+    pub balance: u64,
+    pub owner: String,
+    pub executable: bool,
+    pub rent_epoch: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TransactionSignature {
+    pub signature: String,
+    pub slot: u64,
+    pub block_time: u64,
+    pub memo: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RpcTransaction {
+    pub signature: String,
+    pub block_time: u64,
+    pub slot: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClusterInfo {
+    pub total_nodes: u64,
+    pub endpoint: String,
+}
+
+// RPC Response structures for proper deserialization
+#[derive(Debug, Deserialize)]
+struct RpcResponse<T> {
+    #[serde(default)]
+    result: Option<T>,
+    #[serde(default)]
+    error: Option<RpcError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcError {
+    code: i32,
+    message: String,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+struct AccountData {
+    value: AccountValue,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+struct AccountValue {
+    lamports: u64,
+    owner: String,
+    executable: bool,
+    rent_epoch: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SignatureData {
+    signature: String,
+    slot: u64,
+    #[serde(default)]
+    block_time: Option<u64>,
+    #[serde(default)]
+    memo: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+struct TransactionData {
+    slot: u64,
+    #[serde(default)]
+    block_time: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeInfo {
+    pubkey: String,
+}
+

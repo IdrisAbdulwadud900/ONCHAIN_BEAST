@@ -1,0 +1,42 @@
+# Rust
+/target/
+Cargo.lock
+*.rs.bk
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.sublime-*
+.DS_Store
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+test_output/
+coverage/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
