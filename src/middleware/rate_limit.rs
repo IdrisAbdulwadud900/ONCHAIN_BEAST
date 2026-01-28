@@ -3,7 +3,7 @@
 /// Implements per-IP and per-API-key rate limiting using token bucket algorithm
 
 use actix_web::{
-    body::BoxBody,
+    body::{BoxBody, MessageBody},
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error, HttpMessage, HttpResponse,
 };
@@ -100,9 +100,9 @@ impl<S, B> Transform<S, ServiceRequest> for RateLimiter
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
-    B: 'static,
+    B: MessageBody + 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<BoxBody>;
     type Error = Error;
     type InitError = ();
     type Transform = RateLimiterMiddleware<S>;
@@ -129,9 +129,9 @@ impl<S, B> Service<ServiceRequest> for RateLimiterMiddleware<S>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
-    B: 'static,
+    B: MessageBody + 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<BoxBody>;
     type Error = Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -158,7 +158,7 @@ where
                     let fut = self.service.call(req);
                     Box::pin(async move {
                         let res = fut.await?;
-                        Ok(res)
+                        Ok(res.map_into_boxed_body())
                     })
                 }
                 Err(_) => {
@@ -170,7 +170,7 @@ where
                                 "message": "Too many requests. Please slow down.",
                                 "limit": "300 requests per minute for authenticated users"
                             }));
-                        Ok(ServiceResponse::new(req, response).map_into_left_body())
+                        Ok(ServiceResponse::new(req, response.map_into_boxed_body()))
                     })
                 }
             }
@@ -194,7 +194,7 @@ where
                         let fut = self.service.call(req);
                         Box::pin(async move {
                             let res = fut.await?;
-                            Ok(res)
+                            Ok(res.map_into_boxed_body())
                         })
                     }
                     Err(_) => {
@@ -206,7 +206,7 @@ where
                                     "message": "Too many requests. Please slow down or authenticate with an API key.",
                                     "limit": "60 requests per minute for unauthenticated users"
                                 }));
-                            Ok(ServiceResponse::new(req, response).map_into_right_body())
+                            Ok(ServiceResponse::new(req, response.map_into_boxed_body()))
                         })
                     }
                 }
@@ -215,7 +215,7 @@ where
                 let fut = self.service.call(req);
                 Box::pin(async move {
                     let res = fut.await?;
-                    Ok(res)
+                    Ok(res.map_into_boxed_body())
                 })
             }
         }

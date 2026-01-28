@@ -3,7 +3,7 @@
 /// Validates API keys from request headers and enforces authentication
 
 use actix_web::{
-    body::BoxBody,
+    body::{BoxBody, MessageBody},
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error, HttpMessage, HttpResponse,
 };
@@ -54,9 +54,9 @@ impl<S, B> Transform<S, ServiceRequest> for ApiKeyAuth
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
-    B: 'static,
+    B: MessageBody + 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<BoxBody>;
     type Error = Error;
     type InitError = ();
     type Transform = ApiKeyAuthMiddleware<S>;
@@ -81,9 +81,9 @@ impl<S, B> Service<ServiceRequest> for ApiKeyAuthMiddleware<S>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
-    B: 'static,
+    B: MessageBody + 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<BoxBody>;
     type Error = Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -97,7 +97,7 @@ where
             let fut = self.service.call(req);
             return Box::pin(async move {
                 let res = fut.await?;
-                Ok(res)
+                Ok(res.map_into_boxed_body())
             });
         }
 
@@ -106,7 +106,7 @@ where
             let fut = self.service.call(req);
             return Box::pin(async move {
                 let res = fut.await?;
-                Ok(res)
+                Ok(res.map_into_boxed_body())
             });
         }
 
@@ -128,7 +128,7 @@ where
                 let fut = self.service.call(req);
                 Box::pin(async move {
                     let res = fut.await?;
-                    Ok(res)
+                    Ok(res.map_into_boxed_body())
                 })
             }
             Some(_) => {
@@ -140,7 +140,7 @@ where
                             "error": "Invalid API key",
                             "message": "The provided API key is not valid"
                         }));
-                    Ok(ServiceResponse::new(req, response).map_into_left_body())
+                    Ok(ServiceResponse::new(req, response.map_into_boxed_body()))
                 })
             }
             None => {
@@ -152,7 +152,7 @@ where
                             "error": "Missing API key",
                             "message": "API key required. Include 'X-API-Key' header in your request"
                         }));
-                    Ok(ServiceResponse::new(req, response).map_into_left_body())
+                    Ok(ServiceResponse::new(req, response.map_into_boxed_body()))
                 })
             }
         }

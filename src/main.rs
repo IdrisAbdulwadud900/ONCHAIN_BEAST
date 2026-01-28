@@ -5,7 +5,7 @@ mod database;
 mod analysis;
 mod graph;
 mod cache;
-// TODO: mod middleware; (Authentication & Rate Limiting - implementation in progress)
+mod middleware;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;

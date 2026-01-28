@@ -12,7 +12,7 @@ use crate::core::config::Config;
 use crate::database::storage::Database;
 use crate::analysis::AnalysisEngine;
 use crate::cache::CacheManager;
-// TODO: use crate::middleware::{ApiKeyAuth, RateLimiter, RateLimiterConfig, RequestId};
+use crate::middleware::{ApiKeyAuth, RateLimiter, RateLimiterConfig, RequestId};
 
 /// API server state
 pub struct ApiState {
@@ -41,21 +41,26 @@ pub async fn start_server(
 
     info!("🌐 Starting REST API server on {}:{}", host, port);
 
-    // TODO: Configure middleware (authentication & rate limiting)
-    // let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
-    //     requests_per_minute: config.rate_limit_per_minute,
-    //     burst_size: 10,
-    // });
+    // Configure middleware (authentication & rate limiting)
+    let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
+        requests_per_minute: config.rate_limit_per_minute,
+        burst_size: 10,
+    });
+
+    let api_keys = if config.enable_auth {
+        config.api_keys.clone()
+    } else {
+        vec![] // Empty keys = auth disabled
+    };
 
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
-            // TODO: Add authentication and rate limiting middleware
-            // .wrap(RequestId::new())
-            // .wrap(rate_limiter.clone())
-            // .wrap(ApiKeyAuth::new(api_keys))
+            .wrap(RequestId::new())
+            .wrap(rate_limiter.clone())
+            .wrap(ApiKeyAuth::new(api_keys.clone()))
             // Health check endpoints
             .route("/health", web::get().to(handlers::health_check))
             .route("/status", web::get().to(handlers::get_status))
