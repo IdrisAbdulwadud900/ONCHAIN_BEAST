@@ -8,21 +8,27 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::core::rpc_client::SolanaRpcClient;
+use crate::core::config::Config;
 use crate::database::storage::Database;
 use crate::analysis::AnalysisEngine;
+use crate::cache::CacheManager;
+// TODO: use crate::middleware::{ApiKeyAuth, RateLimiter, RateLimiterConfig, RequestId};
 
 /// API server state
 pub struct ApiState {
     pub rpc_client: Arc<SolanaRpcClient>,
     pub database: Arc<RwLock<Database>>,
     pub analysis_engine: Arc<RwLock<AnalysisEngine>>,
+    pub cache: Arc<CacheManager>,
 }
 
 /// Start the REST API server
 pub async fn start_server(
+    config: Config,
     rpc_client: Arc<SolanaRpcClient>,
     database: Arc<RwLock<Database>>,
     analysis_engine: Arc<RwLock<AnalysisEngine>>,
+    cache: Arc<CacheManager>,
     host: &str,
     port: u16,
 ) -> std::io::Result<()> {
@@ -30,14 +36,26 @@ pub async fn start_server(
         rpc_client,
         database,
         analysis_engine,
+        cache,
     });
 
     info!("🌐 Starting REST API server on {}:{}", host, port);
+
+    // TODO: Configure middleware (authentication & rate limiting)
+    // let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
+    //     requests_per_minute: config.rate_limit_per_minute,
+    //     burst_size: 10,
+    // });
 
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
             .wrap(middleware::Logger::default())
+            .wrap(middleware::Compress::default())
+            // TODO: Add authentication and rate limiting middleware
+            // .wrap(RequestId::new())
+            // .wrap(rate_limiter.clone())
+            // .wrap(ApiKeyAuth::new(api_keys))
             // Health check endpoints
             .route("/health", web::get().to(handlers::health_check))
             .route("/status", web::get().to(handlers::get_status))
@@ -117,16 +135,28 @@ pub mod handlers {
 
     /// Get system status
     pub async fn get_status(state: web::Data<ApiState>) -> HttpResponse {
+        // Check cache first
+        let cache_key = "cluster_info";
+        if let Some(cached) = state.cache.cluster_cache.get(cache_key) {
+            return HttpResponse::Ok().json(cached);
+        }
+
         match state.rpc_client.get_cluster_info().await {
             Ok(cluster) => {
-                HttpResponse::Ok().json(json!({
+                let response = json!({
                     "status": "operational",
                     "cluster": {
                         "nodes": cluster.total_nodes,
                         "active_validators": cluster.total_nodes
                     },
-                    "timestamp": chrono::Utc::now().to_rfc3339()
-                }))
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "cached": false
+                });
+                
+                // Cache the response
+                state.cache.cluster_cache.set(cache_key.to_string(), response.clone());
+                
+                HttpResponse::Ok().json(response)
             }
             Err(e) => HttpResponse::InternalServerError().json(json!({
                 "status": "error",
@@ -142,16 +172,32 @@ pub mod handlers {
     ) -> HttpResponse {
         let wallet_address = address.into_inner();
         
+        // Check cache first
+        let cache_key = format!("account_{}", wallet_address);
+        if let Some(cached) = state.cache.account_cache.get(&cache_key) {
+            let mut response = cached;
+            if let Some(obj) = response.as_object_mut() {
+                obj.insert("cached".to_string(), json!(true));
+            }
+            return HttpResponse::Ok().json(response);
+        }
+        
         match state.rpc_client.get_account_info(&wallet_address).await {
             Ok(account) => {
-                HttpResponse::Ok().json(json!({
+                let response = json!({
                     "wallet": wallet_address,
                     "balance_lamports": account.balance,
                     "balance_sol": account.balance as f64 / 1_000_000_000.0,
                     "owner": account.owner,
                     "executable": account.executable,
-                    "analysis_ready": true
-                }))
+                    "analysis_ready": true,
+                    "cached": false
+                });
+                
+                // Cache the response
+                state.cache.account_cache.set(cache_key, response.clone());
+                
+                HttpResponse::Ok().json(response)
             }
             Err(e) => HttpResponse::NotFound().json(json!({
                 "error": format!("Wallet not found: {}", e),

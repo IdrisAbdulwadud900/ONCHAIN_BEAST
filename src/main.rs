@@ -4,6 +4,8 @@ mod api;
 mod database;
 mod analysis;
 mod graph;
+mod cache;
+// TODO: mod middleware; (Authentication & Rate Limiting - implementation in progress)
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -63,6 +65,20 @@ async fn main() -> anyhow::Result<()> {
     
     info!("✅ Analysis engine initialized");
     
+    // Initialize cache manager
+    let cache_manager = cache::CacheManager::new();
+    let cache_manager = Arc::new(cache_manager);
+    
+    info!("✅ Cache manager initialized");
+    
+    // Log security configuration
+    if config.enable_auth {
+        info!("🔒 API authentication enabled ({} keys)", config.api_keys.len());
+    } else {
+        tracing::warn!("⚠️  API authentication disabled - not recommended for production!");
+    }
+    info!("🚦 Rate limiting: {} requests/minute (unauthenticated)", config.rate_limit_per_minute);
+    
     // Start REST API server
     let api_host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let api_port = std::env::var("API_PORT")
@@ -72,9 +88,11 @@ async fn main() -> anyhow::Result<()> {
     info!("🌐 Starting REST API server on {}:{}", api_host, api_port);
     
     api::start_server(
+        config,
         rpc_client,
         db,
         analysis_engine,
+        cache_manager,
         &api_host,
         api_port,
     )
