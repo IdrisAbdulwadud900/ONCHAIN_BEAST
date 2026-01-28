@@ -145,8 +145,9 @@ async fn get_sol_transfers(
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "signature": signature.to_string(),
-                "message": "SOL transfer parsing available in enhanced parser",
-                "transaction": parsed,
+                "sol_transfers": parsed.sol_transfers,
+                "transfer_count": parsed.sol_transfers.len(),
+                "total_sol_moved": parsed.sol_transfers.iter().map(|t| t.amount_sol).sum::<f64>(),
             }))
         }
         Err(e) => HttpResponse::BadRequest().json(serde_json::json!({
@@ -169,8 +170,12 @@ async fn get_token_transfers(
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "signature": signature.to_string(),
-                "message": "Token transfer parsing available in enhanced parser",
-                "transaction": parsed,
+                "token_transfers": parsed.token_transfers,
+                "transfer_count": parsed.token_transfers.len(),
+                "unique_mints": parsed.token_transfers.iter()
+                    .map(|t| t.mint.clone())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
             }))
         }
         Err(e) => HttpResponse::BadRequest().json(serde_json::json!({
@@ -192,7 +197,35 @@ async fn get_transaction_summary(
         Ok(parsed) => {
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
-                "data": parsed,
+                "signature": parsed.signature,
+                "slot": parsed.slot,
+                "block_time": parsed.block_time,
+                "fee": parsed.fee,
+                "fee_sol": parsed.fee as f64 / 1_000_000_000.0,
+                "success": parsed.success,
+                "error": parsed.error,
+                "transaction_type": format!("{:?}", parsed.tx_type),
+                "is_versioned": parsed.is_versioned,
+                "accounts_involved": parsed.accounts.len(),
+                "signers": parsed.signers.len(),
+                "programs_called": parsed.program_names,
+                "sol_transfers": {
+                    "count": parsed.sol_transfers.len(),
+                    "total_amount_sol": parsed.sol_transfers.iter().map(|t| t.amount_sol).sum::<f64>(),
+                },
+                "token_transfers": {
+                    "count": parsed.token_transfers.len(),
+                    "unique_mints": parsed.token_transfers.iter()
+                        .map(|t| t.mint.clone())
+                        .collect::<std::collections::HashSet<_>>()
+                        .len(),
+                },
+                "balance_changes": {
+                    "count": parsed.balance_changes.len(),
+                    "net_changes": parsed.balance_changes.iter()
+                        .filter(|bc| bc.change_lamports != 0)
+                        .count(),
+                },
             }))
         }
         Err(e) => HttpResponse::BadRequest().json(serde_json::json!({

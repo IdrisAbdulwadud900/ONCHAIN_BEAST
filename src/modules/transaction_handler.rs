@@ -1,43 +1,34 @@
 /// Transaction Handler Module
-/// Integrates RPC client with transaction parser for real data processing
+/// Integrates RPC client with enhanced transaction parser for real data processing
 
-use crate::core::{SolanaRpcClient, TransactionParser};
+use crate::core::{SolanaRpcClient, EnhancedTransactionParser, EnhancedTransaction};
 use crate::core::errors::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
 
-/// Simplified parsed transaction for now
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TransactionSummary {
-    pub signature: String,
-    pub slot: u64,
-    pub block_time: u64,
-    pub success: bool,
-}
-
 pub struct TransactionHandler {
     rpc_client: Arc<SolanaRpcClient>,
-    parser: TransactionParser,
-    /// Cache for transaction summaries
-    cache: Arc<RwLock<HashMap<String, TransactionSummary>>>,
+    parser: EnhancedTransactionParser,
+    /// Cache for parsed transactions
+    cache: Arc<RwLock<HashMap<String, EnhancedTransaction>>>,
 }
 
 impl TransactionHandler {
     pub fn new(rpc_client: Arc<SolanaRpcClient>) -> Self {
         TransactionHandler {
             rpc_client,
-            parser: TransactionParser::new(),
+            parser: EnhancedTransactionParser::new(),
             cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Fetch and parse a single transaction
+    /// Fetch and parse a single transaction with full transfer extraction
     pub async fn process_transaction(
         &self,
         signature: &str,
         _commitment: Option<&str>,
-    ) -> Result<TransactionSummary> {
+    ) -> Result<EnhancedTransaction> {
         // Check cache first
         {
             let cache = self.cache.read().await;
@@ -51,20 +42,16 @@ impl TransactionHandler {
         
         let response = self.rpc_client.get_transaction(signature).await?;
 
-        let summary = TransactionSummary {
-            signature: response.signature.clone(),
-            slot: response.slot,
-            block_time: response.block_time,
-            success: true, // Would need full response to determine
-        };
+        // Parse the transaction using enhanced parser
+        let parsed = self.parser.parse(&response.raw_data, signature.to_string())?;
 
         // Cache the result
         {
             let mut cache = self.cache.write().await;
-            cache.insert(signature.to_string(), summary.clone());
+            cache.insert(signature.to_string(), parsed.clone());
         }
 
-        Ok(summary)
+        Ok(parsed)
     }
 
     /// Fetch and parse wallet's transaction history
@@ -72,7 +59,7 @@ impl TransactionHandler {
         &self,
         wallet: &str,
         limit: usize,
-    ) -> Result<Vec<TransactionSummary>> {
+    ) -> Result<Vec<EnhancedTransaction>> {
         tracing::info!("Processing {} transactions for wallet: {}", limit, wallet);
 
         // Get transaction signatures
@@ -99,7 +86,7 @@ impl TransactionHandler {
     pub async fn process_transactions_batch(
         &self,
         signatures: Vec<String>,
-    ) -> Result<Vec<TransactionSummary>> {
+    ) -> Result<Vec<EnhancedTransaction>> {
         tracing::info!("Processing batch of {} transactions", signatures.len());
 
         let mut results = Vec::new();
@@ -144,7 +131,7 @@ impl Clone for TransactionHandler {
     fn clone(&self) -> Self {
         TransactionHandler {
             rpc_client: Arc::clone(&self.rpc_client),
-            parser: TransactionParser::new(),
+            parser: EnhancedTransactionParser::new(),
             cache: Arc::clone(&self.cache),
         }
     }

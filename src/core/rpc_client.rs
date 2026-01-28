@@ -1,6 +1,6 @@
 /// Solana RPC Client wrapper for blockchain interactions
 use crate::core::errors::{BeastError, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct SolanaRpcClient {
@@ -119,7 +119,7 @@ impl SolanaRpcClient {
         }
     }
 
-    /// Get full transaction details
+    /// Get full transaction details with enhanced data
     pub async fn get_transaction(&self, signature: &str) -> Result<RpcTransaction> {
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -128,8 +128,9 @@ impl SolanaRpcClient {
             "params": [
                 signature,
                 {
-                    "encoding": "json",
-                    "maxSupportedTransactionVersion": 0
+                    "encoding": "jsonParsed",
+                    "maxSupportedTransactionVersion": 0,
+                    "commitment": "confirmed"
                 }
             ]
         });
@@ -142,10 +143,19 @@ impl SolanaRpcClient {
             Ok(response) => match response.json::<RpcResponse<TransactionData>>().await {
                 Ok(rpc_response) => {
                     if let Some(tx_data) = rpc_response.result {
+                        let meta = tx_data.meta.as_ref();
+                        let fee = meta.and_then(|m| m.get("fee")).and_then(|f| f.as_u64()).unwrap_or(0);
+                        let error = meta.and_then(|m| m.get("err")).map(|e| format!("{:?}", e));
+                        let success = error.is_none();
+                        
                         Ok(RpcTransaction {
                             signature: signature.to_string(),
                             block_time: tx_data.block_time.unwrap_or(0),
                             slot: tx_data.slot,
+                            fee,
+                            success,
+                            error,
+                            raw_data: serde_json::to_value(&tx_data).unwrap_or(serde_json::Value::Null),
                         })
                     } else {
                         Err(BeastError::RpcError("Transaction not found".to_string()))
@@ -243,6 +253,10 @@ pub struct RpcTransaction {
     pub signature: String,
     pub block_time: u64,
     pub slot: u64,
+    pub fee: u64,
+    pub success: bool,
+    pub error: Option<String>,
+    pub raw_data: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -289,11 +303,15 @@ struct SignatureData {
     memo: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 struct TransactionData {
     slot: u64,
     #[serde(default)]
     block_time: Option<u64>,
+    #[serde(default)]
+    meta: Option<serde_json::Value>,
+    #[serde(default)]
+    transaction: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
