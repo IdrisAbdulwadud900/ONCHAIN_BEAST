@@ -42,9 +42,23 @@ async fn parse_transaction(
     
     match handler.process_transaction(&signature, None).await {
         Ok(parsed) => {
+            // Enrich with token metadata
+            let enriched = match handler.enrich_with_token_metadata(parsed).await {
+                Ok(enriched) => enriched,
+                Err(e) => {
+                    tracing::warn!("Failed to enrich with token metadata: {:?}", e);
+                    // Return early with error
+                    return HttpResponse::InternalServerError().json(ParseTransactionResponse {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Enrichment failed: {}", e)),
+                    });
+                }
+            };
+            
             HttpResponse::Ok().json(ParseTransactionResponse {
                 success: true,
-                data: serde_json::to_value(&parsed).ok(),
+                data: serde_json::to_value(&enriched).ok(),
                 error: None,
             })
         }
@@ -167,12 +181,24 @@ async fn get_token_transfers(
 
     match handler.process_transaction(&signature, None).await {
         Ok(parsed) => {
+            // Enrich with token metadata
+            let enriched = match handler.enrich_with_token_metadata(parsed).await {
+                Ok(enriched) => enriched,
+                Err(e) => {
+                    tracing::warn!("Failed to enrich token metadata: {:?}", e);
+                    return HttpResponse::InternalServerError().json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Enrichment failed: {}", e),
+                    }));
+                }
+            };
+            
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "signature": signature.to_string(),
-                "token_transfers": parsed.token_transfers,
-                "transfer_count": parsed.token_transfers.len(),
-                "unique_mints": parsed.token_transfers.iter()
+                "token_transfers": enriched.token_transfers,
+                "transfer_count": enriched.token_transfers.len(),
+                "unique_mints": enriched.token_transfers.iter()
                     .map(|t| t.mint.clone())
                     .collect::<std::collections::HashSet<_>>()
                     .len(),

@@ -62,6 +62,16 @@ pub struct TokenTransfer {
     pub authority: String,
     pub instruction_index: usize,
     pub transfer_type: String, // "transfer", "transferChecked", "inner"
+    
+    // Token metadata (enriched fields)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_symbol: Option<String>,
+    
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_name: Option<String>,
+    
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -508,6 +518,9 @@ impl EnhancedTransactionParser {
             authority,
             instruction_index,
             transfer_type: "transfer".to_string(),
+            token_symbol: None,
+            token_name: None,
+            verified: None,
         })
     }
 
@@ -546,6 +559,9 @@ impl EnhancedTransactionParser {
             authority,
             instruction_index,
             transfer_type: "transferChecked".to_string(),
+            token_symbol: None,
+            token_name: None,
+            verified: None,
         })
     }
 

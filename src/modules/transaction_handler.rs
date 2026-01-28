@@ -1,7 +1,7 @@
 /// Transaction Handler Module
 /// Integrates RPC client with enhanced transaction parser for real data processing
 
-use crate::core::{SolanaRpcClient, EnhancedTransactionParser, EnhancedTransaction};
+use crate::core::{SolanaRpcClient, EnhancedTransactionParser, EnhancedTransaction, TokenMetadataService};
 use crate::core::errors::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -10,15 +10,18 @@ use std::collections::HashMap;
 pub struct TransactionHandler {
     rpc_client: Arc<SolanaRpcClient>,
     parser: EnhancedTransactionParser,
+    token_metadata: TokenMetadataService,
     /// Cache for parsed transactions
     cache: Arc<RwLock<HashMap<String, EnhancedTransaction>>>,
 }
 
 impl TransactionHandler {
-    pub fn new(rpc_client: Arc<SolanaRpcClient>) -> Self {
+    pub fn new(rpc_client: Arc<SolanaRpcClient>, rpc_url: String) -> Self {
+        let token_metadata = TokenMetadataService::new(rpc_url);
         TransactionHandler {
             rpc_client,
             parser: EnhancedTransactionParser::new(),
+            token_metadata,
             cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -125,6 +128,48 @@ impl TransactionHandler {
         let cache = self.cache.read().await;
         cache.len()
     }
+    
+    /// Enrich transaction with token metadata
+    pub async fn enrich_with_token_metadata(&self, mut transaction: EnhancedTransaction) -> Result<EnhancedTransaction> {
+        // Collect all unique mints from token transfers
+        let mints: Vec<String> = transaction.token_transfers
+            .iter()
+            .map(|t| t.mint.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        
+        if mints.is_empty() {
+            return Ok(transaction);
+        }
+        
+        // Fetch metadata for all mints
+        let metadata_map: std::collections::HashMap<String, crate::core::TokenMetadata> = 
+            self.token_metadata.get_token_metadata_batch(&mints).await?;
+        
+        // Enrich each token transfer
+        for transfer in &mut transaction.token_transfers {
+            if let Some(metadata) = metadata_map.get(&transfer.mint) {
+                transfer.token_symbol = Some(metadata.symbol.clone());
+                transfer.token_name = Some(metadata.name.clone());
+                transfer.verified = Some(metadata.verified);
+                
+                // Update decimals if we got them from metadata
+                if transfer.decimals == 0 && metadata.decimals > 0 {
+                    transfer.decimals = metadata.decimals;
+                    // Recalculate UI amount with correct decimals
+                    transfer.amount_ui = transfer.amount as f64 / 10_u64.pow(metadata.decimals as u32) as f64;
+                }
+            }
+        }
+        
+        Ok(transaction)
+    }
+    
+    /// Preload common token metadata into cache
+    pub async fn preload_token_metadata(&self) {
+        self.token_metadata.preload_common_tokens().await;
+    }
 }
 
 impl Clone for TransactionHandler {
@@ -132,6 +177,7 @@ impl Clone for TransactionHandler {
         TransactionHandler {
             rpc_client: Arc::clone(&self.rpc_client),
             parser: EnhancedTransactionParser::new(),
+            token_metadata: self.token_metadata.clone(),
             cache: Arc::clone(&self.cache),
         }
     }
@@ -143,8 +189,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handler_creation() {
-        let rpc = Arc::new(SolanaRpcClient::new("https://api.mainnet-beta.solana.com"));
-        let handler = TransactionHandler::new(rpc);
+        let rpc_url = "https://api.mainnet-beta.solana.com".to_string();
+        let rpc = Arc::new(SolanaRpcClient::new(rpc_url.clone()));
+        let handler = TransactionHandler::new(rpc, rpc_url);
         assert_eq!(handler.cache_size().await, 0);
     }
 }

@@ -35,9 +35,17 @@ pub async fn start_server(
     host: &str,
     port: u16,
 ) -> std::io::Result<()> {
+    let rpc_url = config.rpc_endpoint.clone();
     let transaction_handler = Arc::new(RwLock::new(
-        TransactionHandler::new(Arc::clone(&rpc_client))
+        TransactionHandler::new(Arc::clone(&rpc_client), rpc_url)
     ));
+    
+    // Preload common token metadata
+    {
+        let handler = transaction_handler.read().await;
+        handler.preload_token_metadata().await;
+        info!("✅ Preloaded common token metadata");
+    }
 
     let state = web::Data::new(ApiState {
         rpc_client,
