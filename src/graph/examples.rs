@@ -4,7 +4,7 @@
 #[allow(dead_code)]
 #[cfg(test)]
 mod graph_analysis_examples {
-    use crate::graph::{WalletGraph, GraphNode, GraphAnalysisEngine, GraphAlgorithms};
+    use crate::graph::{GraphAlgorithms, GraphAnalysisEngine, GraphNode, WalletGraph};
 
     #[test]
     fn example_side_wallet_detection() {
@@ -24,18 +24,60 @@ mod graph_analysis_examples {
         engine.build_from_wallets(wallets);
 
         // Add fund flows from main to side wallets
-        engine.add_fund_flow("main_wallet".to_string(), "side_wallet_1".to_string(), 2000, 5, 1000, true);
-        engine.add_fund_flow("main_wallet".to_string(), "side_wallet_2".to_string(), 1500, 3, 2000, true);
-        engine.add_fund_flow("main_wallet".to_string(), "side_wallet_3".to_string(), 3000, 8, 3000, true);
+        engine.add_fund_flow(
+            "main_wallet".to_string(),
+            "side_wallet_1".to_string(),
+            2000,
+            5,
+            1000,
+            true,
+        );
+        engine.add_fund_flow(
+            "main_wallet".to_string(),
+            "side_wallet_2".to_string(),
+            1500,
+            3,
+            2000,
+            true,
+        );
+        engine.add_fund_flow(
+            "main_wallet".to_string(),
+            "side_wallet_3".to_string(),
+            3000,
+            8,
+            3000,
+            true,
+        );
 
         // Side wallets send to trading bot
-        engine.add_fund_flow("side_wallet_1".to_string(), "trading_bot".to_string(), 1800, 4, 4000, true);
-        engine.add_fund_flow("side_wallet_2".to_string(), "trading_bot".to_string(), 1300, 2, 5000, true);
-        engine.add_fund_flow("side_wallet_3".to_string(), "trading_bot".to_string(), 2700, 6, 6000, true);
+        engine.add_fund_flow(
+            "side_wallet_1".to_string(),
+            "trading_bot".to_string(),
+            1800,
+            4,
+            4000,
+            true,
+        );
+        engine.add_fund_flow(
+            "side_wallet_2".to_string(),
+            "trading_bot".to_string(),
+            1300,
+            2,
+            5000,
+            true,
+        );
+        engine.add_fund_flow(
+            "side_wallet_3".to_string(),
+            "trading_bot".to_string(),
+            2700,
+            6,
+            6000,
+            true,
+        );
 
         // Detect side wallets
         let candidates = engine.find_side_wallets("main_wallet");
-        
+
         println!("Side wallet candidates for main_wallet:");
         for candidate in &candidates {
             println!(
@@ -64,13 +106,34 @@ mod graph_analysis_examples {
         engine.build_from_wallets(wallets);
 
         // Route: user -> exchange_a -> exchange_b -> final
-        engine.add_fund_flow("user_wallet".to_string(), "exchange_a".to_string(), 10000, 1, 1000, true);
-        engine.add_fund_flow("exchange_a".to_string(), "exchange_b".to_string(), 9500, 1, 2000, true);
-        engine.add_fund_flow("exchange_b".to_string(), "final_wallet".to_string(), 9000, 1, 3000, true);
+        engine.add_fund_flow(
+            "user_wallet".to_string(),
+            "exchange_a".to_string(),
+            10000,
+            1,
+            1000,
+            true,
+        );
+        engine.add_fund_flow(
+            "exchange_a".to_string(),
+            "exchange_b".to_string(),
+            9500,
+            1,
+            2000,
+            true,
+        );
+        engine.add_fund_flow(
+            "exchange_b".to_string(),
+            "final_wallet".to_string(),
+            9000,
+            1,
+            3000,
+            true,
+        );
 
         // Trace routes
         let routes = engine.trace_exchange_routes("user_wallet", "final_wallet");
-        
+
         println!("Exchange routes from user_wallet to final_wallet:");
         for route in &routes {
             println!(
@@ -100,13 +163,34 @@ mod graph_analysis_examples {
         engine.build_from_wallets(wallets);
 
         // Create circular flows (bot_1 -> bot_2 -> bot_3 -> bot_1)
-        engine.add_fund_flow("bot_1".to_string(), "bot_2".to_string(), 5000, 20, 1000, true);
-        engine.add_fund_flow("bot_2".to_string(), "bot_3".to_string(), 4900, 19, 2000, true);
-        engine.add_fund_flow("bot_3".to_string(), "bot_1".to_string(), 4800, 18, 3000, true);
+        engine.add_fund_flow(
+            "bot_1".to_string(),
+            "bot_2".to_string(),
+            5000,
+            20,
+            1000,
+            true,
+        );
+        engine.add_fund_flow(
+            "bot_2".to_string(),
+            "bot_3".to_string(),
+            4900,
+            19,
+            2000,
+            true,
+        );
+        engine.add_fund_flow(
+            "bot_3".to_string(),
+            "bot_1".to_string(),
+            4800,
+            18,
+            3000,
+            true,
+        );
 
         // Detect wash trading
         let patterns = engine.detect_wash_trading("bot_1");
-        
+
         println!("Wash trading patterns detected:");
         for pattern in &patterns {
             println!(
@@ -138,15 +222,50 @@ mod graph_analysis_examples {
         engine.build_from_wallets(wallets);
 
         // Create hub-spoke topology
-        engine.add_fund_flow("hub_1".to_string(), "leaf_1".to_string(), 5000, 10, 1000, true);
-        engine.add_fund_flow("hub_1".to_string(), "leaf_2".to_string(), 4000, 8, 2000, true);
-        engine.add_fund_flow("hub_1".to_string(), "leaf_3".to_string(), 6000, 12, 3000, true);
-        engine.add_fund_flow("hub_2".to_string(), "leaf_1".to_string(), 3000, 5, 4000, true);
-        engine.add_fund_flow("hub_2".to_string(), "hub_1".to_string(), 10000, 3, 5000, true);
+        engine.add_fund_flow(
+            "hub_1".to_string(),
+            "leaf_1".to_string(),
+            5000,
+            10,
+            1000,
+            true,
+        );
+        engine.add_fund_flow(
+            "hub_1".to_string(),
+            "leaf_2".to_string(),
+            4000,
+            8,
+            2000,
+            true,
+        );
+        engine.add_fund_flow(
+            "hub_1".to_string(),
+            "leaf_3".to_string(),
+            6000,
+            12,
+            3000,
+            true,
+        );
+        engine.add_fund_flow(
+            "hub_2".to_string(),
+            "leaf_1".to_string(),
+            3000,
+            5,
+            4000,
+            true,
+        );
+        engine.add_fund_flow(
+            "hub_2".to_string(),
+            "hub_1".to_string(),
+            10000,
+            3,
+            5000,
+            true,
+        );
 
         // Detect network anomalies
         let anomalies = engine.detect_network_anomalies();
-        
+
         println!("Network analysis results:");
         println!("  Unusual patterns: {}", anomalies.unusual_patterns);
         println!("  High-risk wallets: {}", anomalies.high_risk_wallets);
@@ -170,10 +289,38 @@ mod graph_analysis_examples {
         engine.build_from_wallets(wallets);
 
         // Create multiple paths
-        engine.add_fund_flow("wallet_a".to_string(), "wallet_b".to_string(), 500, 2, 1000, true);
-        engine.add_fund_flow("wallet_a".to_string(), "wallet_c".to_string(), 300, 1, 2000, true);
-        engine.add_fund_flow("wallet_b".to_string(), "wallet_d".to_string(), 400, 1, 3000, true);
-        engine.add_fund_flow("wallet_c".to_string(), "wallet_d".to_string(), 250, 2, 4000, true);
+        engine.add_fund_flow(
+            "wallet_a".to_string(),
+            "wallet_b".to_string(),
+            500,
+            2,
+            1000,
+            true,
+        );
+        engine.add_fund_flow(
+            "wallet_a".to_string(),
+            "wallet_c".to_string(),
+            300,
+            1,
+            2000,
+            true,
+        );
+        engine.add_fund_flow(
+            "wallet_b".to_string(),
+            "wallet_d".to_string(),
+            400,
+            1,
+            3000,
+            true,
+        );
+        engine.add_fund_flow(
+            "wallet_c".to_string(),
+            "wallet_d".to_string(),
+            250,
+            2,
+            4000,
+            true,
+        );
 
         // Find shortest path
         if let Some(path) = GraphAlgorithms::shortest_path(engine.graph(), "wallet_a", "wallet_d") {

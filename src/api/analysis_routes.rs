@@ -1,9 +1,8 @@
+use crate::modules::{PatternDetector, TransactionGraphBuilder, TransactionHandler};
 /// Analysis API Routes
 /// Advanced transaction analysis and pattern detection endpoints
-
-use actix_web::{web, HttpResponse, get, post};
+use actix_web::{get, post, web, HttpResponse};
 use serde::{Deserialize, Serialize};
-use crate::modules::{TransactionHandler, TransactionGraphBuilder, PatternDetector};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -52,7 +51,10 @@ async fn analyze_wallet(
     let handler = handler.read().await;
 
     // Fetch wallet transactions
-    let transactions = match handler.process_wallet_transactions(&req.wallet, req.transaction_limit).await {
+    let transactions = match handler
+        .process_wallet_transactions(&req.wallet, req.transaction_limit)
+        .await
+    {
         Ok(txs) => txs,
         Err(e) => {
             return HttpResponse::BadRequest().json(AnalyzeWalletResponse {
@@ -129,7 +131,10 @@ async fn analyze_fund_flow(
     }
 
     // Fetch all transactions
-    let transactions = match handler.process_transactions_batch(req.transactions.clone()).await {
+    let transactions = match handler
+        .process_transactions_batch(req.transactions.clone())
+        .await
+    {
         Ok(txs) => txs,
         Err(e) => {
             return HttpResponse::BadRequest().json(serde_json::json!({
@@ -167,7 +172,10 @@ async fn detect_patterns(
     }
 
     // Fetch transactions
-    let transactions = match handler.process_transactions_batch(req.transactions.clone()).await {
+    let transactions = match handler
+        .process_transactions_batch(req.transactions.clone())
+        .await
+    {
         Ok(txs) => txs,
         Err(e) => {
             return HttpResponse::BadRequest().json(serde_json::json!({

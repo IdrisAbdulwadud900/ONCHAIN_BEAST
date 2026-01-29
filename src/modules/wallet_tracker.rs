@@ -1,11 +1,10 @@
 /// WalletTracker: Core module for tracking and clustering connected wallets
-/// 
+///
 /// Responsibilities:
 /// - Find wallets connected to a main wallet
 /// - Identify side wallets and alternate addresses
 /// - Track wallet relationships and fund flows
 /// - Detect wallet clustering patterns
-
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -41,7 +40,7 @@ impl WalletTracker {
     pub fn find_connected_wallets(&self, wallet_address: &str) -> HashSet<String> {
         let mut connected = HashSet::new();
         let mut to_visit = vec![wallet_address.to_string()];
-        
+
         while let Some(current) = to_visit.pop() {
             if connected.insert(current.clone()) {
                 if let Some(related) = self.relationships.get(&current) {
@@ -49,7 +48,7 @@ impl WalletTracker {
                 }
             }
         }
-        
+
         connected
     }
 
@@ -58,7 +57,7 @@ impl WalletTracker {
         // Implement clustering using connected components algorithm
         let mut visited = std::collections::HashSet::new();
         let mut clusters = Vec::new();
-        
+
         for wallet_address in self.wallets.keys() {
             if !visited.contains(wallet_address) {
                 let cluster = self.find_connected_wallets(wallet_address);
@@ -68,7 +67,7 @@ impl WalletTracker {
                 }
             }
         }
-        
+
         clusters
     }
 

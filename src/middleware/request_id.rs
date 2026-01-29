@@ -1,7 +1,6 @@
 /// Request ID Middleware
 ///
 /// Adds unique request ID to each request for tracking and debugging
-
 use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error, HttpMessage,
@@ -62,21 +61,22 @@ where
     fn call(&self, req: ServiceRequest) -> Self::Future {
         // Generate unique request ID
         let request_id = Uuid::new_v4().to_string();
-        
+
         // Store in request extensions
-        req.extensions_mut().insert(RequestIdValue(request_id.clone()));
+        req.extensions_mut()
+            .insert(RequestIdValue(request_id.clone()));
 
         let fut = self.service.call(req);
 
         Box::pin(async move {
             let mut res = fut.await?;
-            
+
             // Add request ID to response headers
             res.headers_mut().insert(
                 actix_web::http::header::HeaderName::from_static("x-request-id"),
                 actix_web::http::header::HeaderValue::from_str(&request_id).unwrap(),
             );
-            
+
             Ok(res)
         })
     }

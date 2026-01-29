@@ -5,9 +5,7 @@
 /// - Network structure analysis
 /// - Anomaly detection
 /// - Entity behavior profiling
-
-use super::wallet_graph::{WalletGraph, GraphNode};
-use std::collections::HashMap;
+use super::wallet_graph::WalletGraph;
 
 /// Overall network metrics
 #[derive(Debug, Clone)]
@@ -40,12 +38,12 @@ pub struct NodeMetrics {
 /// Risk scoring component
 #[derive(Debug, Clone)]
 pub struct RiskFactors {
-    pub high_frequency_transactions: bool,  // Many transactions in short time
-    pub large_transfers: bool,  // Unusual amounts
-    pub exchange_interactions: u32,  // Number of exchanges involved
-    pub isolated_behavior: bool,  // Limited connections
-    pub circular_patterns: u32,  // Wash trading indicators
-    pub dormant_then_active: bool,  // Sudden activity after idle period
+    pub high_frequency_transactions: bool, // Many transactions in short time
+    pub large_transfers: bool,             // Unusual amounts
+    pub exchange_interactions: u32,        // Number of exchanges involved
+    pub isolated_behavior: bool,           // Limited connections
+    pub circular_patterns: u32,            // Wash trading indicators
+    pub dormant_then_active: bool,         // Sudden activity after idle period
 }
 
 impl NetworkMetrics {
@@ -55,7 +53,8 @@ impl NetworkMetrics {
         let edge_count = graph.edge_count();
         let density = graph.density();
 
-        let total_degree: usize = graph.nodes()
+        let total_degree: usize = graph
+            .nodes()
             .keys()
             .map(|addr| {
                 let in_deg = graph.get_incoming_edges(addr).len();
@@ -70,7 +69,8 @@ impl NetworkMetrics {
             0.0
         };
 
-        let (max_degree, min_degree) = graph.nodes()
+        let (max_degree, min_degree) = graph
+            .nodes()
             .keys()
             .map(|addr| {
                 let in_deg = graph.get_incoming_edges(addr).len();
@@ -81,9 +81,14 @@ impl NetworkMetrics {
                 (max.max(deg), min.min(deg))
             });
 
-        let min_degree = if min_degree == usize::MAX { 0 } else { min_degree };
+        let min_degree = if min_degree == usize::MAX {
+            0
+        } else {
+            min_degree
+        };
 
-        let total_volume: u64 = graph.edges()
+        let total_volume: u64 = graph
+            .edges()
             .values()
             .flat_map(|edges| edges.iter().map(|e| e.amount))
             .sum();
@@ -101,7 +106,7 @@ impl NetworkMetrics {
             avg_degree,
             max_degree,
             min_degree,
-            diameter: 0,  // Would require BFS from each node
+            diameter: 0, // Would require BFS from each node
             total_volume,
             avg_transaction_value,
         }
@@ -128,17 +133,10 @@ impl NodeMetrics {
         let net_flow = out_volume as i128 - in_volume as i128;
 
         // Get node's risk score if available
-        let node_risk = graph.get_node(address)
-            .map(|n| n.risk_score)
-            .unwrap_or(0.0);
+        let node_risk = graph.get_node(address).map(|n| n.risk_score).unwrap_or(0.0);
 
-        let risk_score = Self::calculate_risk_score(
-            in_degree,
-            out_degree,
-            in_volume,
-            out_volume,
-            node_risk,
-        );
+        let risk_score =
+            Self::calculate_risk_score(in_degree, out_degree, in_volume, out_volume, node_risk);
 
         NodeMetrics {
             address: address.to_string(),
@@ -195,7 +193,7 @@ impl NodeMetrics {
         let cycles = super::algorithms::GraphAlgorithms::find_cycles(
             graph,
             &self.address,
-            4,  // Max depth of 4 hops
+            4, // Max depth of 4 hops
         );
         self.suspicious_pattern_count = cycles.len() as u32;
 
@@ -218,7 +216,7 @@ impl AnomalyDetector {
         let mut anomalies = Vec::new();
         let network_metrics = NetworkMetrics::calculate(graph);
 
-        for (address, _node) in graph.nodes() {
+        for address in graph.nodes().keys() {
             let metrics = NodeMetrics::calculate(graph, address);
 
             // Anomaly 1: Node with degree much higher than average

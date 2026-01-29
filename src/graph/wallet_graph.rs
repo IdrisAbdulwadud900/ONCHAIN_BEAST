@@ -5,7 +5,6 @@
 /// - Fund flow tracing
 /// - Entity detection
 /// - Risk assessment through network topology
-
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Represents a node in the wallet graph
@@ -26,14 +25,14 @@ pub struct Edge {
     pub amount: u64,
     pub transaction_count: u64,
     pub last_transfer: u64,
-    pub is_direct: bool,  // True if direct transfer, false if through exchange
+    pub is_direct: bool, // True if direct transfer, false if through exchange
 }
 
 /// Weighted edge for pathfinding algorithms
 #[derive(Debug, Clone)]
 pub struct WeightedEdge {
     pub target: String,
-    pub weight: f64,  // Lower weight = more likely path
+    pub weight: f64, // Lower weight = more likely path
     pub edge: Edge,
 }
 
@@ -41,8 +40,8 @@ pub struct WeightedEdge {
 #[derive(Debug, Clone)]
 pub struct WalletGraph {
     nodes: HashMap<String, GraphNode>,
-    edges: HashMap<String, Vec<Edge>>,  // from -> list of outgoing edges
-    reverse_edges: HashMap<String, Vec<Edge>>,  // to -> list of incoming edges
+    edges: HashMap<String, Vec<Edge>>, // from -> list of outgoing edges
+    reverse_edges: HashMap<String, Vec<Edge>>, // to -> list of incoming edges
 }
 
 impl WalletGraph {
@@ -65,13 +64,13 @@ impl WalletGraph {
         // Add forward edge
         self.edges
             .entry(edge.from.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(edge.clone());
 
         // Add reverse edge for bidirectional analysis
         self.reverse_edges
             .entry(edge.to.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(edge);
     }
 

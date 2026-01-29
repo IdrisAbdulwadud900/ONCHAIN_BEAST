@@ -5,7 +5,6 @@
 /// - Detect when wallets use exchanges as mixers
 /// - Track fund flows through centralized exchanges
 /// - Determine wallet ownership relationships through exchange activity
-
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -31,7 +30,7 @@ impl ExchangeDetector {
     /// Load known exchange addresses on Solana
     fn load_known_exchanges() -> HashMap<String, ExchangeWallet> {
         let mut exchanges = HashMap::new();
-        
+
         // Populate with known Solana exchange addresses
         // This would come from a comprehensive database
         exchanges.insert(
@@ -43,7 +42,7 @@ impl ExchangeDetector {
                 is_hot_wallet: true,
             },
         );
-        
+
         exchanges
     }
 
@@ -69,15 +68,15 @@ impl ExchangeDetector {
         target_wallet: &str,
     ) -> Vec<ExchangeRoute> {
         let mut routes = Vec::new();
-        
+
         routes.push(ExchangeRoute {
             source: initial_wallet.to_string(),
             exchanges: vec![],
             destination: target_wallet.to_string(),
             confidence: 0.8,
         });
-        
-        for (_, exchange) in &self.known_exchanges {
+
+        for exchange in self.known_exchanges.values() {
             routes.push(ExchangeRoute {
                 source: initial_wallet.to_string(),
                 exchanges: vec![exchange.exchange_name.clone()],
@@ -85,21 +84,27 @@ impl ExchangeDetector {
                 confidence: 0.6,
             });
         }
-        
+
         routes
     }
 
     /// Find alternative wallets same owner likely uses post-exchange
     pub fn find_post_exchange_wallets(&self, exchange_deposit: &str) -> Vec<String> {
         let mut receiving_wallets = Vec::new();
-        
+
         if !exchange_deposit.is_empty() {
-            receiving_wallets.push(format!("derived_{}", &exchange_deposit[0..8.min(exchange_deposit.len())]));
+            receiving_wallets.push(format!(
+                "derived_{}",
+                &exchange_deposit[0..8.min(exchange_deposit.len())]
+            ));
             if exchange_deposit.len() > 8 {
-                receiving_wallets.push(format!("related_{}", &exchange_deposit[8..16.min(exchange_deposit.len())]));
+                receiving_wallets.push(format!(
+                    "related_{}",
+                    &exchange_deposit[8..16.min(exchange_deposit.len())]
+                ));
             }
         }
-        
+
         receiving_wallets
     }
 }

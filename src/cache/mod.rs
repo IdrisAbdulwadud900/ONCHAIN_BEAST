@@ -1,7 +1,6 @@
 /// Response Caching Layer
 ///
 /// Provides in-memory caching for RPC responses to reduce costs and improve performance
-
 use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -105,10 +104,10 @@ impl CacheManager {
     /// Create new cache manager with default TTLs
     pub fn new() -> Self {
         Self {
-            account_cache: ResponseCache::new(300),      // 5 minutes
-            transaction_cache: ResponseCache::new(600),  // 10 minutes
-            cluster_cache: ResponseCache::new(60),       // 1 minute
-            signature_cache: ResponseCache::new(120),    // 2 minutes
+            account_cache: ResponseCache::new(300),     // 5 minutes
+            transaction_cache: ResponseCache::new(600), // 10 minutes
+            cluster_cache: ResponseCache::new(60),      // 1 minute
+            signature_cache: ResponseCache::new(120),   // 2 minutes
         }
     }
 
@@ -158,10 +157,10 @@ mod tests {
     fn test_cache_expiration() {
         let cache = ResponseCache::<String>::new(1);
         cache.set("key1".to_string(), "value1".to_string());
-        
+
         // Immediate get should work
         assert_eq!(cache.get("key1"), Some("value1".to_string()));
-        
+
         // Wait for expiration
         std::thread::sleep(std::time::Duration::from_secs(2));
         assert_eq!(cache.get("key1"), None);

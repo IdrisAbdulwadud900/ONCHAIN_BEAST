@@ -1,3 +1,5 @@
+use super::wallet_graph::WalletGraph;
+use std::cmp::Ordering;
 /// Graph Algorithms for blockchain analysis
 ///
 /// Implements advanced algorithms for:
@@ -5,10 +7,7 @@
 /// - Connected components (wallet clustering)
 /// - Centrality analysis (importance scoring)
 /// - Cycle detection (wash trading patterns)
-
-use std::collections::{HashMap, HashSet, BinaryHeap};
-use std::cmp::Ordering;
-use super::wallet_graph::WalletGraph;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 /// Result of shortest path finding
 #[derive(Debug, Clone)]
@@ -98,13 +97,14 @@ impl GraphAlgorithms {
 
                 let next_vol = volumes.get(&current).unwrap_or(&0) + edge.amount;
 
-                if !distances.contains_key(&edge.to)
-                    || next_dist < distances[&edge.to]
-                {
+                if !distances.contains_key(&edge.to) || next_dist < distances[&edge.to] {
                     distances.insert(edge.to.clone(), next_dist);
                     volumes.insert(edge.to.clone(), next_vol);
                     previous.insert(edge.to.clone(), current.clone());
-                    heap.push(std::cmp::Reverse((OrderedFloat(next_dist), edge.to.clone())));
+                    heap.push(std::cmp::Reverse((
+                        OrderedFloat(next_dist),
+                        edge.to.clone(),
+                    )));
                 }
             }
         }
@@ -113,11 +113,7 @@ impl GraphAlgorithms {
     }
 
     /// Find all shortest paths (BFS for unweighted shortest paths)
-    pub fn all_shortest_paths(
-        graph: &WalletGraph,
-        from: &str,
-        to: &str,
-    ) -> Vec<ShortestPath> {
+    pub fn all_shortest_paths(graph: &WalletGraph, from: &str, to: &str) -> Vec<ShortestPath> {
         if from == to {
             return vec![ShortestPath {
                 path: vec![from.to_string()],
@@ -129,7 +125,14 @@ impl GraphAlgorithms {
 
         let mut paths = Vec::new();
         let mut visited = HashSet::new();
-        Self::dfs_paths(graph, from, to, &mut visited, &mut vec![from.to_string()], &mut paths);
+        Self::dfs_paths(
+            graph,
+            from,
+            to,
+            &mut visited,
+            &mut vec![from.to_string()],
+            &mut paths,
+        );
         paths
     }
 
@@ -224,7 +227,13 @@ impl GraphAlgorithms {
         for neighbor in graph.get_neighbors(v) {
             if !index.contains_key(&neighbor) {
                 Self::strongconnect(
-                    &neighbor, graph, index_counter, index, lowlinks, stack, on_stack,
+                    &neighbor,
+                    graph,
+                    index_counter,
+                    index,
+                    lowlinks,
+                    stack,
+                    on_stack,
                     components,
                 );
                 let neighbor_lowlink = *lowlinks.get(&neighbor).unwrap_or(&0);
@@ -318,8 +327,8 @@ impl GraphAlgorithms {
         if max_possible == 0.0 {
             return 0.0;
         }
-        let degree = (graph.get_neighbors(address).len() + graph.get_predecessors(address).len())
-            as f64;
+        let degree =
+            (graph.get_neighbors(address).len() + graph.get_predecessors(address).len()) as f64;
         degree / max_possible
     }
 

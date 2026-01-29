@@ -1,7 +1,6 @@
 /// Middleware components for OnChain Beast API
 ///
 /// Provides authentication, rate limiting, and request tracking
-
 pub mod auth;
 pub mod rate_limit;
 pub mod request_id;

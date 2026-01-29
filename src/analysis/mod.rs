@@ -1,8 +1,7 @@
 /// Analysis engine orchestrating all analysis modules
-/// 
+///
 /// This module coordinates wallet tracking, transaction analysis,
 /// pattern detection, and exchange interaction detection
-
 use crate::modules::{ExchangeDetector, PatternDetector, TransactionAnalyzer, WalletTracker};
 
 #[derive(Debug)]
@@ -24,11 +23,14 @@ impl AnalysisEngine {
     }
 
     /// Main analysis function: investigate a wallet and find connected addresses
-    pub async fn investigate_wallet(&self, primary_wallet: &str) -> crate::core::errors::Result<InvestigationResult> {
+    pub async fn investigate_wallet(
+        &self,
+        primary_wallet: &str,
+    ) -> crate::core::errors::Result<InvestigationResult> {
         tracing::info!("Starting investigation of wallet: {}", primary_wallet);
-        
+
         let side_wallets = self.wallet_tracker.find_connected_wallets(primary_wallet);
-        
+
         let risk_assessment = if side_wallets.len() > 10 {
             RiskAssessment::High
         } else if side_wallets.len() > 5 {
@@ -36,14 +38,18 @@ impl AnalysisEngine {
         } else {
             RiskAssessment::Low
         };
-        
-        let mixer_behavior = self.exchange_detector
+
+        let mixer_behavior = self
+            .exchange_detector
             .detect_mixer_behavior(primary_wallet)
             .is_mixer;
-        
-        tracing::info!("Investigation complete: {} side wallets found, risk level: {:?}", 
-            side_wallets.len(), risk_assessment);
-        
+
+        tracing::info!(
+            "Investigation complete: {} side wallets found, risk level: {:?}",
+            side_wallets.len(),
+            risk_assessment
+        );
+
         Ok(InvestigationResult {
             primary_wallet: primary_wallet.to_string(),
             side_wallets: side_wallets.into_iter().collect(),
@@ -59,17 +65,19 @@ impl AnalysisEngine {
         target: &str,
     ) -> crate::core::errors::Result<Vec<FundFlow>> {
         tracing::info!("Tracing fund flows from {} to {}", source, target);
-        
+
         let mut flows = Vec::new();
-        
+
         flows.push(FundFlow {
             from_wallet: source.to_string(),
             to_wallet: target.to_string(),
             amount: 0,
             path_description: "Direct transfer".to_string(),
         });
-        
-        let routes = self.exchange_detector.trace_through_exchanges(source, target);
+
+        let routes = self
+            .exchange_detector
+            .trace_through_exchanges(source, target);
         for route in routes {
             if !route.exchanges.is_empty() {
                 flows.push(FundFlow {
@@ -80,7 +88,7 @@ impl AnalysisEngine {
                 });
             }
         }
-        
+
         Ok(flows)
     }
 }

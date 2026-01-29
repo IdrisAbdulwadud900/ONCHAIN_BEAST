@@ -1,9 +1,8 @@
+use crate::graph::algorithms::GraphAlgorithms;
+use crate::graph::metrics::{AnomalyDetector, NodeMetrics};
 /// Graph Integration Module
 /// Connects graph analysis capabilities with wallet tracking and transaction analysis
-
-use crate::graph::{WalletGraph, GraphNode, Edge};
-use crate::graph::algorithms::GraphAlgorithms;
-use crate::graph::metrics::{NetworkMetrics, NodeMetrics, AnomalyDetector};
+use crate::graph::{Edge, GraphNode, WalletGraph};
 use std::collections::HashMap;
 
 /// High-level graph analysis coordinator
@@ -81,7 +80,7 @@ impl GraphAnalysisEngine {
         let mut candidates = Vec::new();
 
         // Strategy 1: Wallets directly connected through multiple hops
-        let reachable = self.graph.get_reachable(main_wallet);
+        let _reachable = self.graph.get_reachable(main_wallet);
         let mut hop_distances: HashMap<String, usize> = HashMap::new();
 
         // BFS to calculate hop distances
@@ -116,7 +115,11 @@ impl GraphAnalysisEngine {
             }
         }
 
-        candidates.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+        candidates.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         candidates
     }
 

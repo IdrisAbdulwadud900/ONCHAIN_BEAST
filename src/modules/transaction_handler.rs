@@ -1,11 +1,13 @@
+use crate::core::errors::Result;
 /// Transaction Handler Module
 /// Integrates RPC client with enhanced transaction parser for real data processing
-
-use crate::core::{SolanaRpcClient, EnhancedTransactionParser, EnhancedTransaction, TokenMetadataService};
-use crate::core::errors::Result;
+use crate::core::{
+    EnhancedTransaction, EnhancedTransactionParser, SolanaRpcClient, TokenMetadataService,
+};
+use crate::metrics::{Timer, PARSE_DURATION, SOL_TRANSFERS, TOKEN_TRANSFERS, TRANSACTIONS_PARSED};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::collections::HashMap;
 
 pub struct TransactionHandler {
     rpc_client: Arc<SolanaRpcClient>,
@@ -32,6 +34,8 @@ impl TransactionHandler {
         signature: &str,
         _commitment: Option<&str>,
     ) -> Result<EnhancedTransaction> {
+        let timer = Timer::new();
+
         // Check cache first
         {
             let cache = self.cache.read().await;
@@ -42,11 +46,33 @@ impl TransactionHandler {
 
         // Fetch from RPC
         tracing::info!("Fetching transaction: {}", signature);
-        
+
         let response = self.rpc_client.get_transaction(signature).await?;
 
         // Parse the transaction using enhanced parser
-        let parsed = self.parser.parse(&response.raw_data, signature.to_string())?;
+        let parsed = self
+            .parser
+            .parse(&response.raw_data, signature.to_string())?;
+
+        // Track metrics
+        TRANSACTIONS_PARSED.inc();
+        for _ in 0..parsed.sol_transfers.len() {
+            SOL_TRANSFERS.inc();
+        }
+        for _ in 0..parsed.token_transfers.len() {
+            TOKEN_TRANSFERS.inc();
+        }
+        PARSE_DURATION.observe(timer.elapsed_secs());
+
+        // Log transfer summary
+        if !parsed.sol_transfers.is_empty() || !parsed.token_transfers.is_empty() {
+            tracing::debug!(
+                "Transaction {}: {} SOL transfers, {} token transfers",
+                signature,
+                parsed.sol_transfers.len(),
+                parsed.token_transfers.len()
+            );
+        }
 
         // Cache the result
         {
@@ -93,17 +119,15 @@ impl TransactionHandler {
         tracing::info!("Processing batch of {} transactions", signatures.len());
 
         let mut results = Vec::new();
-        
+
         // Process in parallel chunks (8 at a time to avoid rate limiting)
         for chunk in signatures.chunks(8) {
             let mut futures = Vec::new();
-            
+
             for sig in chunk {
                 let sig = sig.clone();
                 let this = self.clone();
-                futures.push(async move {
-                    this.process_transaction(&sig, None).await
-                });
+                futures.push(async move { this.process_transaction(&sig, None).await });
             }
 
             // Wait for chunk to complete
@@ -128,44 +152,49 @@ impl TransactionHandler {
         let cache = self.cache.read().await;
         cache.len()
     }
-    
+
     /// Enrich transaction with token metadata
-    pub async fn enrich_with_token_metadata(&self, mut transaction: EnhancedTransaction) -> Result<EnhancedTransaction> {
+    pub async fn enrich_with_token_metadata(
+        &self,
+        mut transaction: EnhancedTransaction,
+    ) -> Result<EnhancedTransaction> {
         // Collect all unique mints from token transfers
-        let mints: Vec<String> = transaction.token_transfers
+        let mints: Vec<String> = transaction
+            .token_transfers
             .iter()
             .map(|t| t.mint.clone())
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect();
-        
+
         if mints.is_empty() {
             return Ok(transaction);
         }
-        
+
         // Fetch metadata for all mints
-        let metadata_map: std::collections::HashMap<String, crate::core::TokenMetadata> = 
+        let metadata_map: std::collections::HashMap<String, crate::core::TokenMetadata> =
             self.token_metadata.get_token_metadata_batch(&mints).await?;
-        
+
         // Enrich each token transfer
         for transfer in &mut transaction.token_transfers {
             if let Some(metadata) = metadata_map.get(&transfer.mint) {
                 transfer.token_symbol = Some(metadata.symbol.clone());
                 transfer.token_name = Some(metadata.name.clone());
                 transfer.verified = Some(metadata.verified);
-                
+
                 // Update decimals if we got them from metadata
                 if transfer.decimals == 0 && metadata.decimals > 0 {
                     transfer.decimals = metadata.decimals;
                     // Recalculate UI amount with correct decimals
-                    transfer.amount_ui = transfer.amount as f64 / 10_u64.pow(metadata.decimals as u32) as f64;
+                    transfer.amount_ui =
+                        transfer.amount as f64 / 10_u64.pow(metadata.decimals as u32) as f64;
                 }
             }
         }
-        
+
         Ok(transaction)
     }
-    
+
     /// Preload common token metadata into cache
     pub async fn preload_token_metadata(&self) {
         self.token_metadata.preload_common_tokens().await;

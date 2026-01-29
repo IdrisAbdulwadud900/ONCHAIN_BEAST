@@ -1,10 +1,9 @@
 /// Transaction to Graph Converter
 /// Builds wallet relationship graphs from parsed transaction data
-
-use crate::core::{EnhancedTransaction, SolTransfer, TokenTransfer};
-use crate::graph::{WalletGraph, GraphNode, Edge};
-use std::collections::{HashMap, HashSet};
+use crate::core::{EnhancedTransaction, TokenTransfer};
+use crate::graph::{Edge, GraphNode, WalletGraph};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 /// Fund flow graph built from transactions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,10 +33,10 @@ pub struct WalletNode {
 /// Wallet role classification
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WalletRole {
-    Source,           // Only sends
-    Sink,            // Only receives
-    Intermediary,    // Both sends and receives
-    Exchange,        // High volume, many connections
+    Source,       // Only sends
+    Sink,         // Only receives
+    Intermediary, // Both sends and receives
+    Exchange,     // High volume, many connections
     Unknown,
 }
 
@@ -113,8 +112,14 @@ impl TransactionGraphBuilder {
         // Process token transfers
         for token_transfer in &tx.token_transfers {
             self.record_token_transfer(
-                &token_transfer.from_owner.clone().unwrap_or_else(|| "unknown".to_string()),
-                &token_transfer.to_owner.clone().unwrap_or_else(|| "unknown".to_string()),
+                &token_transfer
+                    .from_owner
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                &token_transfer
+                    .to_owner
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
                 token_transfer,
                 &tx.signature,
                 tx.block_time,

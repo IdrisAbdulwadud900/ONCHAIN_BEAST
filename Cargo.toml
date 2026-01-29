@@ -18,7 +18,7 @@ actix-web = "4.4"
 actix-rt = "2.9"
 
 # Data serialization
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.21"
 hex = "0.4"
@@ -50,3 +50,16 @@ dashmap = "5.5"  # Concurrent hashmap for caching
 governor = "0.6"
 nonzero_ext = "0.3"
 
+# Database - Using tokio-postgres for direct control
+tokio-postgres = "0.7"
+postgres-types = { version = "0.2", features = ["derive"] }
+
+# Redis
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+
+# Metrics
+prometheus = "0.13"
+prometheus-client = "0.22"
+# Telegram Bot
+teloxide = { version = "0.17", features = ["macros"] }
+pretty_env_logger = "0.5"

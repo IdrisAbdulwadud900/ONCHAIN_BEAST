@@ -1,7 +1,6 @@
 /// Pattern Detection Module
 /// Detects suspicious trading patterns: wash trading, pump-dump, circular flows
-
-use crate::modules::transaction_graph_builder::{FundFlowGraph, WalletRole, FundFlow};
+use crate::modules::transaction_graph_builder::{FundFlow, FundFlowGraph, WalletRole};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -29,9 +28,9 @@ pub struct WashTradingPattern {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum WashTradingType {
-    DirectBackAndForth,    // A -> B -> A
-    CircularThreeWay,      // A -> B -> C -> A
-    MultiHopCircular,      // A -> ... -> A (4+ wallets)
+    DirectBackAndForth, // A -> B -> A
+    CircularThreeWay,   // A -> B -> C -> A
+    MultiHopCircular,   // A -> ... -> A (4+ wallets)
 }
 
 /// Pump and dump indicators
@@ -137,7 +136,7 @@ impl PatternDetector {
         // Build adjacency map for quick lookups
         let mut flow_map: HashMap<String, Vec<&FundFlow>> = HashMap::new();
         for flow in &graph.flows {
-            flow_map.entry(flow.from.clone()).or_insert_with(Vec::new).push(flow);
+            flow_map.entry(flow.from.clone()).or_default().push(flow);
         }
 
         // Detect A -> B -> A patterns
@@ -152,15 +151,19 @@ impl PatternDetector {
                     if reverse_flow.to == flow.from {
                         // Found back-and-forth pattern
                         let total_volume = flow.sol_amount + reverse_flow.sol_amount;
-                        let time_span = if let (Some(t1), Some(t2)) = (flow.first_seen, reverse_flow.last_seen) {
+                        let time_span = if let (Some(t1), Some(t2)) =
+                            (flow.first_seen, reverse_flow.last_seen)
+                        {
                             t2.saturating_sub(t1)
                         } else {
                             0
                         };
 
                         // Calculate confidence based on volume similarity and timing
-                        let volume_ratio = (flow.sol_amount / reverse_flow.sol_amount).min(reverse_flow.sol_amount / flow.sol_amount);
-                        let confidence = volume_ratio * 0.7 + (if time_span < 3600 { 0.3 } else { 0.1 });
+                        let volume_ratio = (flow.sol_amount / reverse_flow.sol_amount)
+                            .min(reverse_flow.sol_amount / flow.sol_amount);
+                        let confidence =
+                            volume_ratio * 0.7 + (if time_span < 3600 { 0.3 } else { 0.1 });
 
                         patterns.push(WashTradingPattern {
                             wallets_involved: vec![flow.from.clone(), flow.to.clone()],
@@ -206,7 +209,8 @@ impl PatternDetector {
                         for flow_ca in flows_from_c {
                             if flow_ca.to == flow_ab.from {
                                 // Found A -> B -> C -> A
-                                let total_volume = flow_ab.sol_amount + flow_bc.sol_amount + flow_ca.sol_amount;
+                                let total_volume =
+                                    flow_ab.sol_amount + flow_bc.sol_amount + flow_ca.sol_amount;
                                 let confidence = 0.8; // High confidence for 3-way circular
 
                                 patterns.push(WashTradingPattern {
@@ -215,7 +219,9 @@ impl PatternDetector {
                                         flow_ab.to.clone(),
                                         flow_bc.to.clone(),
                                     ],
-                                    transaction_count: flow_ab.transfer_count + flow_bc.transfer_count + flow_ca.transfer_count,
+                                    transaction_count: flow_ab.transfer_count
+                                        + flow_bc.transfer_count
+                                        + flow_ca.transfer_count,
                                     total_volume,
                                     time_span_seconds: 0, // Would need to calculate
                                     pattern_type: WashTradingType::CircularThreeWay,
@@ -295,9 +301,19 @@ impl PatternDetector {
 
         if let Some(neighbors) = adjacency.get(current) {
             for (neighbor, flow_volume) in neighbors {
-                if !visited.contains(neighbor) || (neighbor == target && path.len() >= self.circular_flow_min_hops) {
+                if !visited.contains(neighbor)
+                    || (neighbor == target && path.len() >= self.circular_flow_min_hops)
+                {
                     *volume += flow_volume;
-                    self.dfs_find_cycles(neighbor, target, adjacency, visited, path, volume, circular_flows);
+                    self.dfs_find_cycles(
+                        neighbor,
+                        target,
+                        adjacency,
+                        visited,
+                        path,
+                        volume,
+                        circular_flows,
+                    );
                     *volume -= flow_volume;
                 }
             }
@@ -334,7 +350,8 @@ impl PatternDetector {
                     .collect();
 
                 if !pump_wallets.is_empty() && !dump_wallets.is_empty() {
-                    let risk_score = ((pump_wallets.len() + dump_wallets.len()) as f64 / 20.0).min(1.0);
+                    let risk_score =
+                        ((pump_wallets.len() + dump_wallets.len()) as f64 / 20.0).min(1.0);
 
                     indicators.push(PumpDumpIndicator {
                         suspected_coordinator: wallet.address.clone(),
@@ -432,8 +449,8 @@ impl PatternDetector {
         let wash_confidence: f64 = wash_patterns.iter().map(|p| p.confidence).sum::<f64>()
             / wash_patterns.len().max(1) as f64;
 
-        let pump_confidence: f64 = pump_dump.iter().map(|p| p.risk_score).sum::<f64>()
-            / pump_dump.len().max(1) as f64;
+        let pump_confidence: f64 =
+            pump_dump.iter().map(|p| p.risk_score).sum::<f64>() / pump_dump.len().max(1) as f64;
 
         let circular_confidence = if !circular.is_empty() { 0.8 } else { 0.0 };
 
@@ -454,14 +471,9 @@ mod tests {
     #[test]
     fn test_risk_level_calculation() {
         let detector = PatternDetector::new();
-        
-        let level = detector.calculate_overall_risk(
-            &vec![],
-            &vec![],
-            &vec![],
-            &vec![],
-        );
-        
+
+        let level = detector.calculate_overall_risk(&vec![], &vec![], &vec![], &vec![]);
+
         assert_eq!(level, RiskLevel::Low);
     }
 }

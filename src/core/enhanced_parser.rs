@@ -1,8 +1,7 @@
+use crate::core::errors::{BeastError, Result};
 /// Enhanced Transaction Parser - Extracts SOL and Token Transfers
 /// Parses Solana transactions to extract fund flows and transfer details
-
 use serde::{Deserialize, Serialize};
-use crate::core::errors::{Result, BeastError};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -17,23 +16,23 @@ pub struct EnhancedTransaction {
     pub fee: u64,
     pub success: bool,
     pub error: Option<String>,
-    
+
     // Account analysis
     pub accounts: Vec<String>,
     pub signers: Vec<String>,
     pub writable_accounts: Vec<String>,
-    
+
     // Transfer extraction
     pub sol_transfers: Vec<SolTransfer>,
     pub token_transfers: Vec<TokenTransfer>,
-    
+
     // Balance changes
     pub balance_changes: Vec<BalanceChange>,
-    
+
     // Program interaction
     pub programs_called: Vec<String>,
     pub program_names: Vec<String>,
-    
+
     // Classification
     pub tx_type: TransactionType,
     pub is_versioned: bool,
@@ -62,14 +61,14 @@ pub struct TokenTransfer {
     pub authority: String,
     pub instruction_index: usize,
     pub transfer_type: String, // "transfer", "transferChecked", "inner"
-    
+
     // Token metadata (enriched fields)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_symbol: Option<String>,
-    
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_name: Option<String>,
-    
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified: Option<bool>,
 }
@@ -105,12 +104,12 @@ pub struct EnhancedTransactionParser {
     token_program: String,
     token_2022_program: String,
     associated_token_program: String,
-    
+
     // DEX programs
     raydium_v4: String,
     orca_whirlpool: String,
     jupiter_v6: String,
-    
+
     // NFT programs
     metaplex: String,
     magic_eden: String,
@@ -132,34 +131,39 @@ impl EnhancedTransactionParser {
     }
 
     /// Parse a full transaction from raw RPC data
-    pub fn parse(&self, raw_data: &serde_json::Value, signature: String) -> Result<EnhancedTransaction> {
-        let slot = raw_data.get("slot")
-            .and_then(|s| s.as_u64())
-            .unwrap_or(0);
+    pub fn parse(
+        &self,
+        raw_data: &serde_json::Value,
+        signature: String,
+    ) -> Result<EnhancedTransaction> {
+        let slot = raw_data.get("slot").and_then(|s| s.as_u64()).unwrap_or(0);
 
-        let block_time = raw_data.get("blockTime")
+        let block_time = raw_data
+            .get("blockTime")
             .or_else(|| raw_data.get("block_time"))
             .and_then(|t| t.as_u64());
 
         // Extract metadata
-        let meta = raw_data.get("meta")
+        let meta = raw_data
+            .get("meta")
             .ok_or_else(|| BeastError::RpcError("No meta field in transaction".to_string()))?;
 
-        let fee = meta.get("fee")
-            .and_then(|f| f.as_u64())
-            .unwrap_or(0);
+        let fee = meta.get("fee").and_then(|f| f.as_u64()).unwrap_or(0);
 
-        let error = meta.get("err")
+        let error = meta
+            .get("err")
             .filter(|e| !e.is_null())
             .map(|e| format!("{:?}", e));
 
         let success = error.is_none();
 
         // Extract transaction data
-        let transaction = raw_data.get("transaction")
+        let transaction = raw_data
+            .get("transaction")
             .ok_or_else(|| BeastError::RpcError("No transaction field".to_string()))?;
 
-        let message = transaction.get("message")
+        let message = transaction
+            .get("message")
             .ok_or_else(|| BeastError::RpcError("No message field".to_string()))?;
 
         // Extract accounts
@@ -172,18 +176,21 @@ impl EnhancedTransactionParser {
         let post_balances = self.extract_balances(meta.get("postBalances"));
 
         // Calculate balance changes
-        let balance_changes = self.calculate_balance_changes(&accounts, &pre_balances, &post_balances);
+        let balance_changes =
+            self.calculate_balance_changes(&accounts, &pre_balances, &post_balances);
 
         // Parse instructions
-        let instructions_vec: Vec<serde_json::Value> = message.get("instructions")
+        let instructions_vec: Vec<serde_json::Value> = message
+            .get("instructions")
             .and_then(|i| i.as_array())
             .cloned()
             .unwrap_or_default();
         let instructions = instructions_vec.as_slice();
 
         // Extract SOL transfers from instructions and balance changes
-        let mut sol_transfers = self.extract_sol_transfers_from_instructions(instructions, &accounts);
-        
+        let mut sol_transfers =
+            self.extract_sol_transfers_from_instructions(instructions, &accounts);
+
         // Add SOL transfers from balance changes (catches inner instructions)
         sol_transfers.extend(self.extract_sol_transfers_from_balances(&balance_changes));
 
@@ -192,16 +199,18 @@ impl EnhancedTransactionParser {
 
         // Extract program IDs
         let programs_called = self.extract_program_ids(instructions, &accounts);
-        let program_names = programs_called.iter()
+        let program_names = programs_called
+            .iter()
             .map(|id| self.get_program_name(id))
             .collect();
 
         // Determine transaction type
-        let tx_type = self.determine_transaction_type(&programs_called, &sol_transfers, &token_transfers);
+        let tx_type =
+            self.determine_transaction_type(&programs_called, &sol_transfers, &token_transfers);
 
         // Check if versioned
-        let is_versioned = message.get("version").is_some() ||
-                          message.get("addressTableLookups").is_some();
+        let is_versioned =
+            message.get("version").is_some() || message.get("addressTableLookups").is_some();
 
         Ok(EnhancedTransaction {
             signature,
@@ -228,11 +237,13 @@ impl EnhancedTransactionParser {
     // ========================================================================
 
     fn extract_accounts(&self, message: &serde_json::Value) -> Result<Vec<String>> {
-        let keys = message.get("accountKeys")
+        let keys = message
+            .get("accountKeys")
             .and_then(|k| k.as_array())
             .ok_or_else(|| BeastError::RpcError("No accountKeys in message".to_string()))?;
 
-        Ok(keys.iter()
+        Ok(keys
+            .iter()
             .filter_map(|k| {
                 // Handle both string format and object format
                 k.as_str()
@@ -242,30 +253,39 @@ impl EnhancedTransactionParser {
             .collect())
     }
 
-    fn extract_signers(&self, message: &serde_json::Value, accounts: &[String]) -> Result<Vec<String>> {
-        let num_required = message.get("header")
+    fn extract_signers(
+        &self,
+        message: &serde_json::Value,
+        accounts: &[String],
+    ) -> Result<Vec<String>> {
+        let num_required = message
+            .get("header")
             .and_then(|h| h.get("numRequiredSignatures"))
             .and_then(|n| n.as_u64())
             .unwrap_or(0) as usize;
 
-        Ok(accounts.iter()
-            .take(num_required)
-            .cloned()
-            .collect())
+        Ok(accounts.iter().take(num_required).cloned().collect())
     }
 
-    fn extract_writable_accounts(&self, message: &serde_json::Value, accounts: &[String]) -> Result<Vec<String>> {
+    fn extract_writable_accounts(
+        &self,
+        message: &serde_json::Value,
+        accounts: &[String],
+    ) -> Result<Vec<String>> {
         let header = message.get("header");
-        
-        let num_required = header.and_then(|h| h.get("numRequiredSignatures"))
+
+        let num_required = header
+            .and_then(|h| h.get("numRequiredSignatures"))
             .and_then(|n| n.as_u64())
             .unwrap_or(0) as usize;
 
-        let num_readonly_signed = header.and_then(|h| h.get("numReadonlySignedAccounts"))
+        let num_readonly_signed = header
+            .and_then(|h| h.get("numReadonlySignedAccounts"))
             .and_then(|n| n.as_u64())
             .unwrap_or(0) as usize;
 
-        let num_readonly_unsigned = header.and_then(|h| h.get("numReadonlyUnsignedAccounts"))
+        let num_readonly_unsigned = header
+            .and_then(|h| h.get("numReadonlyUnsignedAccounts"))
             .and_then(|n| n.as_u64())
             .unwrap_or(0) as usize;
 
@@ -274,10 +294,10 @@ impl EnhancedTransactionParser {
         let writable_unsigned = total_accounts.saturating_sub(num_required + num_readonly_unsigned);
 
         let mut writable = Vec::new();
-        
+
         // Add writable signers
         writable.extend(accounts.iter().take(writable_signed).cloned());
-        
+
         // Add writable non-signers
         if num_required < total_accounts {
             let start_idx = num_required;
@@ -295,9 +315,7 @@ impl EnhancedTransactionParser {
     fn extract_balances(&self, balances_json: Option<&serde_json::Value>) -> Vec<u64> {
         balances_json
             .and_then(|b| b.as_array())
-            .map(|arr| arr.iter()
-                .filter_map(|v| v.as_u64())
-                .collect())
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
             .unwrap_or_default()
     }
 
@@ -307,12 +325,13 @@ impl EnhancedTransactionParser {
         pre_balances: &[u64],
         post_balances: &[u64],
     ) -> Vec<BalanceChange> {
-        accounts.iter()
+        accounts
+            .iter()
             .enumerate()
             .filter_map(|(idx, account)| {
                 let pre = pre_balances.get(idx).copied()?;
                 let post = post_balances.get(idx).copied()?;
-                
+
                 if pre == post {
                     return None; // No change
                 }
@@ -335,21 +354,37 @@ impl EnhancedTransactionParser {
     // SOL TRANSFER EXTRACTION
     // ========================================================================
 
+    fn instruction_program_id(
+        &self,
+        instr: &serde_json::Value,
+        accounts: &[String],
+    ) -> Option<String> {
+        // `getTransaction` with `encoding=jsonParsed` uses `programId`.
+        // Other encodings use `programIdIndex`.
+        if let Some(program_idx) = instr.get("programIdIndex").and_then(|p| p.as_u64()) {
+            return accounts.get(program_idx as usize).cloned();
+        }
+
+        instr
+            .get("programId")
+            .and_then(|p| p.as_str())
+            .map(|s| s.to_string())
+    }
+
     fn extract_sol_transfers_from_instructions(
         &self,
         instructions: &[serde_json::Value],
         accounts: &[String],
     ) -> Vec<SolTransfer> {
-        instructions.iter()
+        instructions
+            .iter()
             .enumerate()
             .filter_map(|(idx, instr)| {
-                // Get program ID
-                let program_idx = instr.get("programIdIndex")
-                    .and_then(|p| p.as_u64())? as usize;
-                let program_id = accounts.get(program_idx)?;
+                // Get program ID (supports both programIdIndex and jsonParsed programId)
+                let program_id = self.instruction_program_id(instr, accounts)?;
 
                 // Only process system program instructions
-                if program_id != &self.system_program {
+                if program_id != self.system_program {
                     return None;
                 }
 
@@ -390,14 +425,19 @@ impl EnhancedTransactionParser {
         }
     }
 
-    fn extract_sol_transfers_from_balances(&self, balance_changes: &[BalanceChange]) -> Vec<SolTransfer> {
+    fn extract_sol_transfers_from_balances(
+        &self,
+        balance_changes: &[BalanceChange],
+    ) -> Vec<SolTransfer> {
         // Group balance changes to find transfers
         // This is simplified - in production would need more sophisticated matching
-        let increases: Vec<_> = balance_changes.iter()
+        let increases: Vec<_> = balance_changes
+            .iter()
             .filter(|bc| bc.change_lamports > 0)
             .collect();
 
-        let decreases: Vec<_> = balance_changes.iter()
+        let decreases: Vec<_> = balance_changes
+            .iter()
             .filter(|bc| bc.change_lamports < 0)
             .collect();
 
@@ -426,6 +466,47 @@ impl EnhancedTransactionParser {
     // TOKEN TRANSFER EXTRACTION
     // ========================================================================
 
+    fn build_token_account_meta_map(
+        &self,
+        meta: &serde_json::Value,
+        accounts: &[String],
+    ) -> HashMap<String, (String, String, u8)> {
+        // token_account_pubkey -> (mint, owner, decimals)
+        let mut map: HashMap<String, (String, String, u8)> = HashMap::new();
+
+        for key in ["preTokenBalances", "postTokenBalances"] {
+            if let Some(entries) = meta.get(key).and_then(|v| v.as_array()) {
+                for entry in entries {
+                    let Some(account_index) = entry.get("accountIndex").and_then(|v| v.as_u64())
+                    else {
+                        continue;
+                    };
+                    let Some(account) = accounts.get(account_index as usize) else {
+                        continue;
+                    };
+
+                    let mint = entry
+                        .get("mint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let Some(owner) = entry.get("owner").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let decimals = entry
+                        .get("uiTokenAmount")
+                        .and_then(|v| v.get("decimals"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u8;
+
+                    map.insert(account.clone(), (mint, owner.to_string(), decimals));
+                }
+            }
+        }
+
+        map
+    }
+
     fn extract_token_transfers(
         &self,
         instructions: &[serde_json::Value],
@@ -434,9 +515,16 @@ impl EnhancedTransactionParser {
     ) -> Result<Vec<TokenTransfer>> {
         let mut transfers = Vec::new();
 
+        let token_account_meta = self.build_token_account_meta_map(meta, accounts);
+
         // Extract from main instructions
         for (idx, instr) in instructions.iter().enumerate() {
-            if let Some(transfer) = self.extract_token_transfer_from_instruction(instr, accounts, idx) {
+            if let Some(transfer) = self.extract_token_transfer_from_instruction(
+                instr,
+                accounts,
+                &token_account_meta,
+                idx,
+            ) {
                 transfers.push(transfer);
             }
         }
@@ -444,8 +532,11 @@ impl EnhancedTransactionParser {
         // Extract from inner instructions
         if let Some(inner_instructions) = meta.get("innerInstructions").and_then(|i| i.as_array()) {
             for inner_group in inner_instructions {
-                if let Some(inner_instrs) = inner_group.get("instructions").and_then(|i| i.as_array()) {
-                    let outer_idx = inner_group.get("index")
+                if let Some(inner_instrs) =
+                    inner_group.get("instructions").and_then(|i| i.as_array())
+                {
+                    let outer_idx = inner_group
+                        .get("index")
                         .and_then(|i| i.as_u64())
                         .unwrap_or(0) as usize;
 
@@ -453,6 +544,7 @@ impl EnhancedTransactionParser {
                         if let Some(transfer) = self.extract_token_transfer_from_instruction(
                             inner_instr,
                             accounts,
+                            &token_account_meta,
                             outer_idx * 1000 + inner_idx, // Encode as inner instruction
                         ) {
                             transfers.push(transfer);
@@ -469,15 +561,14 @@ impl EnhancedTransactionParser {
         &self,
         instr: &serde_json::Value,
         accounts: &[String],
+        token_account_meta: &HashMap<String, (String, String, u8)>,
         instruction_index: usize,
     ) -> Option<TokenTransfer> {
-        // Get program ID
-        let program_idx = instr.get("programIdIndex")
-            .and_then(|p| p.as_u64())? as usize;
-        let program_id = accounts.get(program_idx)?;
+        // Get program ID (supports both programIdIndex and jsonParsed programId)
+        let program_id = self.instruction_program_id(instr, accounts)?;
 
         // Only process token program instructions
-        if program_id != &self.token_program && program_id != &self.token_2022_program {
+        if program_id != self.token_program && program_id != self.token_2022_program {
             return None;
         }
 
@@ -486,8 +577,10 @@ impl EnhancedTransactionParser {
         let instruction_type = parsed.get("type")?.as_str()?;
 
         match instruction_type {
-            "transfer" => self.parse_token_transfer(parsed, instruction_index),
-            "transferChecked" => self.parse_token_transfer_checked(parsed, instruction_index),
+            "transfer" => self.parse_token_transfer(parsed, token_account_meta, instruction_index),
+            "transferChecked" => {
+                self.parse_token_transfer_checked(parsed, token_account_meta, instruction_index)
+            }
             _ => None,
         }
     }
@@ -495,26 +588,53 @@ impl EnhancedTransactionParser {
     fn parse_token_transfer(
         &self,
         parsed: &serde_json::Value,
+        token_account_meta: &HashMap<String, (String, String, u8)>,
         instruction_index: usize,
     ) -> Option<TokenTransfer> {
         let info = parsed.get("info")?;
-        
+
         let from_token_account = info.get("source")?.as_str()?.to_string();
         let to_token_account = info.get("destination")?.as_str()?.to_string();
         let authority = info.get("authority")?.as_str()?.to_string();
-        let amount = info.get("amount")
+        let amount = info
+            .get("amount")
             .and_then(|a| a.as_str())
             .and_then(|s| s.parse::<u64>().ok())?;
 
+        let (from_mint, from_owner, from_decimals) = token_account_meta
+            .get(&from_token_account)
+            .map(|(m, o, d)| (m.clone(), Some(o.clone()), *d))
+            .unwrap_or_else(|| ("unknown".to_string(), None, 0));
+        let (to_mint, to_owner, to_decimals) = token_account_meta
+            .get(&to_token_account)
+            .map(|(m, o, d)| (m.clone(), Some(o.clone()), *d))
+            .unwrap_or_else(|| ("unknown".to_string(), None, 0));
+
+        let mint = if from_mint != "unknown" {
+            from_mint
+        } else {
+            to_mint
+        };
+        let decimals = if from_decimals != 0 {
+            from_decimals
+        } else {
+            to_decimals
+        };
+        let amount_ui = if decimals > 0 {
+            amount as f64 / 10_u64.pow(decimals as u32) as f64
+        } else {
+            amount as f64
+        };
+
         Some(TokenTransfer {
-            mint: "unknown".to_string(), // Would need additional lookup
+            mint,
             from_token_account,
             to_token_account,
-            from_owner: None,
-            to_owner: None,
+            from_owner,
+            to_owner,
             amount,
-            decimals: 0, // Unknown without mint info
-            amount_ui: amount as f64,
+            decimals,
+            amount_ui,
             authority,
             instruction_index,
             transfer_type: "transfer".to_string(),
@@ -527,23 +647,44 @@ impl EnhancedTransactionParser {
     fn parse_token_transfer_checked(
         &self,
         parsed: &serde_json::Value,
+        token_account_meta: &HashMap<String, (String, String, u8)>,
         instruction_index: usize,
     ) -> Option<TokenTransfer> {
         let info = parsed.get("info")?;
-        
+
         let from_token_account = info.get("source")?.as_str()?.to_string();
         let to_token_account = info.get("destination")?.as_str()?.to_string();
         let authority = info.get("authority")?.as_str()?.to_string();
-        let mint = info.get("mint")?.as_str()?.to_string();
-        let decimals = info.get("decimals")
-            .and_then(|d| d.as_u64())
-            .unwrap_or(0) as u8;
-        
+        let mint = info
+            .get("mint")
+            .and_then(|m| m.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                token_account_meta
+                    .get(&from_token_account)
+                    .map(|(m, _, _)| m.clone())
+            })
+            .or_else(|| {
+                token_account_meta
+                    .get(&to_token_account)
+                    .map(|(m, _, _)| m.clone())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let decimals = info.get("decimals").and_then(|d| d.as_u64()).unwrap_or(0) as u8;
+
         let token_amount = info.get("tokenAmount")?;
-        let amount = token_amount.get("amount")
+        let amount = token_amount
+            .get("amount")
             .and_then(|a| a.as_str())
             .and_then(|s| s.parse::<u64>().ok())?;
-        let amount_ui = token_amount.get("uiAmount")
+        let from_owner = token_account_meta
+            .get(&from_token_account)
+            .map(|(_, o, _)| o.clone());
+        let to_owner = token_account_meta
+            .get(&to_token_account)
+            .map(|(_, o, _)| o.clone());
+        let amount_ui = token_amount
+            .get("uiAmount")
             .and_then(|a| a.as_f64())
             .unwrap_or(amount as f64 / 10_u64.pow(decimals as u32) as f64);
 
@@ -551,8 +692,8 @@ impl EnhancedTransactionParser {
             mint,
             from_token_account,
             to_token_account,
-            from_owner: None,
-            to_owner: None,
+            from_owner,
+            to_owner,
             amount,
             decimals,
             amount_ui,
@@ -574,12 +715,9 @@ impl EnhancedTransactionParser {
         instructions: &[serde_json::Value],
         accounts: &[String],
     ) -> Vec<String> {
-        instructions.iter()
-            .filter_map(|instr| {
-                let program_idx = instr.get("programIdIndex")
-                    .and_then(|p| p.as_u64())? as usize;
-                accounts.get(program_idx).cloned()
-            })
+        instructions
+            .iter()
+            .filter_map(|instr| self.instruction_program_id(instr, accounts))
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect()
@@ -596,7 +734,11 @@ impl EnhancedTransactionParser {
             p if p == self.jupiter_v6 => "Jupiter V6".to_string(),
             p if p == self.metaplex => "Metaplex".to_string(),
             p if p == self.magic_eden => "Magic Eden".to_string(),
-            _ => format!("{}...{}", &program_id[..8], &program_id[program_id.len()-8..]),
+            _ => format!(
+                "{}...{}",
+                &program_id[..8],
+                &program_id[program_id.len() - 8..]
+            ),
         }
     }
 
@@ -612,12 +754,13 @@ impl EnhancedTransactionParser {
     ) -> TransactionType {
         // Check for DEX interactions first
         for program in programs {
-            if program.contains(&self.raydium_v4) || 
-               program.contains(&self.orca_whirlpool) ||
-               program.contains(&self.jupiter_v6) {
+            if program.contains(&self.raydium_v4)
+                || program.contains(&self.orca_whirlpool)
+                || program.contains(&self.jupiter_v6)
+            {
                 return TransactionType::TokenSwap;
             }
-            
+
             if program.contains(&self.metaplex) || program.contains(&self.magic_eden) {
                 return TransactionType::NFTTrade;
             }

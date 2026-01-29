@@ -1,15 +1,15 @@
-pub mod wallet_graph;
 pub mod algorithms;
-pub mod metrics;
 pub mod integration;
+pub mod metrics;
+pub mod wallet_graph;
 
 #[cfg(test)]
 mod examples;
 
-pub use wallet_graph::{WalletGraph, Edge, GraphNode};
-pub use algorithms::{GraphAlgorithms, ShortestPath, ConnectedComponent};
-pub use metrics::{NetworkMetrics, NodeMetrics};
+pub use algorithms::{ConnectedComponent, GraphAlgorithms, ShortestPath};
 pub use integration::{
-    GraphAnalysisEngine, WalletClusterAnalysis, SideWalletCandidate,
-    ExchangeRoute, WashTradingPattern, NetworkAnomalies,
+    ExchangeRoute, GraphAnalysisEngine, NetworkAnomalies, SideWalletCandidate,
+    WalletClusterAnalysis, WashTradingPattern,
 };
+pub use metrics::{NetworkMetrics, NodeMetrics};
+pub use wallet_graph::{Edge, GraphNode, WalletGraph};

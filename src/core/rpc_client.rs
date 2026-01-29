@@ -33,7 +33,9 @@ impl SolanaRpcClient {
             "params": [address, { "encoding": "jsonParsed" }]
         });
 
-        match self.http_client.post(&self.endpoint)
+        match self
+            .http_client
+            .post(&self.endpoint)
             .json(&body)
             .send()
             .await
@@ -85,7 +87,9 @@ impl SolanaRpcClient {
             "params": [address, { "limit": limit.min(1000) }]
         });
 
-        match self.http_client.post(&self.endpoint)
+        match self
+            .http_client
+            .post(&self.endpoint)
             .json(&body)
             .send()
             .await
@@ -135,7 +139,9 @@ impl SolanaRpcClient {
             ]
         });
 
-        match self.http_client.post(&self.endpoint)
+        match self
+            .http_client
+            .post(&self.endpoint)
             .json(&body)
             .send()
             .await
@@ -144,10 +150,13 @@ impl SolanaRpcClient {
                 Ok(rpc_response) => {
                     if let Some(tx_data) = rpc_response.result {
                         let meta = tx_data.meta.as_ref();
-                        let fee = meta.and_then(|m| m.get("fee")).and_then(|f| f.as_u64()).unwrap_or(0);
+                        let fee = meta
+                            .and_then(|m| m.get("fee"))
+                            .and_then(|f| f.as_u64())
+                            .unwrap_or(0);
                         let error = meta.and_then(|m| m.get("err")).map(|e| format!("{:?}", e));
                         let success = error.is_none();
-                        
+
                         Ok(RpcTransaction {
                             signature: signature.to_string(),
                             block_time: tx_data.block_time.unwrap_or(0),
@@ -155,7 +164,8 @@ impl SolanaRpcClient {
                             fee,
                             success,
                             error,
-                            raw_data: serde_json::to_value(&tx_data).unwrap_or(serde_json::Value::Null),
+                            raw_data: serde_json::to_value(&tx_data)
+                                .unwrap_or(serde_json::Value::Null),
                         })
                     } else {
                         Err(BeastError::RpcError("Transaction not found".to_string()))
@@ -181,7 +191,9 @@ impl SolanaRpcClient {
             "method": "getHealth"
         });
 
-        match self.http_client.post(&self.endpoint)
+        match self
+            .http_client
+            .post(&self.endpoint)
             .json(&body)
             .send()
             .await
@@ -205,7 +217,9 @@ impl SolanaRpcClient {
             "method": "getClusterNodes"
         });
 
-        match self.http_client.post(&self.endpoint)
+        match self
+            .http_client
+            .post(&self.endpoint)
             .json(&body)
             .send()
             .await
@@ -318,4 +332,3 @@ struct TransactionData {
 struct NodeInfo {
     pubkey: String,
 }
-

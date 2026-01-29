@@ -28,8 +28,8 @@ mod core {
     }
 
     pub mod rpc_client {
-        use serde::Deserialize;
         use super::errors::{BeastError, Result};
+        use serde::Deserialize;
 
         #[derive(Clone)]
         pub struct SolanaRpcClient {
@@ -52,7 +52,9 @@ mod core {
                     "method": "getHealth"
                 });
 
-                match self.http_client.post(&self.endpoint)
+                match self
+                    .http_client
+                    .post(&self.endpoint)
                     .json(&body)
                     .send()
                     .await
@@ -75,7 +77,9 @@ mod core {
                     "method": "getClusterNodes"
                 });
 
-                match self.http_client.post(&self.endpoint)
+                match self
+                    .http_client
+                    .post(&self.endpoint)
                     .json(&body)
                     .send()
                     .await
@@ -128,15 +132,20 @@ async fn main() -> anyhow::Result<()> {
     println!("==================================\n");
 
     // Initialize RPC client with Solana mainnet endpoint
-    let rpc = SolanaRpcClient::new(
-        "https://api.mainnet-beta.solana.com".to_string()
-    );
+    let rpc = SolanaRpcClient::new("https://api.mainnet-beta.solana.com".to_string());
 
     // 1. Health Check
     println!("1️⃣  Checking RPC Health...");
     match rpc.health_check().await {
         Ok(healthy) => {
-            println!("   Status: {}\n", if healthy { "✅ Healthy" } else { "❌ Unhealthy" });
+            println!(
+                "   Status: {}\n",
+                if healthy {
+                    "✅ Healthy"
+                } else {
+                    "❌ Unhealthy"
+                }
+            );
         }
         Err(e) => {
             eprintln!("   Error: {}\n", e);

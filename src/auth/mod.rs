@@ -2,12 +2,7 @@
 ///
 /// This approach uses Actix-web extractors instead of middleware,
 /// avoiding complex type system issues while providing clean auth.
-
-use actix_web::{
-    dev::Payload,
-    error::ErrorUnauthorized,
-    Error, FromRequest, HttpRequest,
-};
+use actix_web::{dev::Payload, error::ErrorUnauthorized, Error, FromRequest, HttpRequest};
 use futures::future::{ready, Ready};
 use std::sync::OnceLock;
 
@@ -36,6 +31,9 @@ pub fn is_auth_enabled() -> bool {
 ///
 /// Usage in handlers:
 /// ```
+/// use actix_web::{HttpResponse, Result};
+/// use onchain_beast::auth::ApiKey;
+///
 /// async fn protected_handler(_auth: ApiKey) -> Result<HttpResponse> {
 ///     // This handler requires authentication
 ///     Ok(HttpResponse::Ok().json("Protected data"))
@@ -88,6 +86,9 @@ impl FromRequest for ApiKey {
 ///
 /// Usage in handlers:
 /// ```
+/// use actix_web::{HttpResponse, Result};
+/// use onchain_beast::auth::MaybeApiKey;
+///
 /// async fn maybe_protected_handler(auth: MaybeApiKey) -> Result<HttpResponse> {
 ///     match auth.0 {
 ///         Some(api_key) => {
@@ -143,7 +144,7 @@ mod tests {
         // Note: This test may fail if keys are already initialized
         let keys = vec!["test-key-1".to_string(), "test-key-2".to_string()];
         init_api_keys(keys.clone());
-        
+
         assert!(is_auth_enabled());
         assert_eq!(get_api_keys().len(), 2);
     }

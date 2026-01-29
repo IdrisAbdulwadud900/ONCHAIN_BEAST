@@ -74,69 +74,63 @@ cargo build --release
 
 ### Configuration
 
-Set environment variables:
+Use the provided `.env.example` (recommended):
 ```bash
-export SOLANA_RPC_ENDPOINT="https://api.mainnet-beta.solana.com"
-export DATABASE_URL="sqlite:onchain_beast.db"
-export MAX_CONCURRENT_REQUESTS=100
-export CACHE_TTL_SECONDS=3600
+cp .env.example .env
 ```
 
-### Running
+Key settings (defaults shown):
+- `SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com`
+- `DATABASE_URL=postgresql://<user>@localhost/onchain_beast_personal`
+- `REDIS_URL=redis://127.0.0.1:6379`
+- `SERVER_HOST=127.0.0.1`
+- `SERVER_PORT=8080`
+
+### Running the API Server
 
 ```bash
-cargo run --release
+./start.sh
+```
+
+Health check:
+```bash
+curl http://127.0.0.1:8080/health
 ```
 
 ## Usage Examples
 
-### Analyze a Wallet
+### Analyze a Wallet (API)
 
-```rust
-use onchain_beast::analysis::AnalysisEngine;
-
-#[tokio::main]
-async fn main() {
-    let engine = AnalysisEngine::new();
-    
-    let result = engine.investigate_wallet(
-        "YOUR_WALLET_ADDRESS"
-    ).await.unwrap();
-    
-    println!("Connected wallets: {:?}", result.side_wallets);
-    println!("Risk Level: {:?}", result.risk_assessment);
-}
+```bash
+curl http://127.0.0.1:8080/analysis/wallet/<WALLET_ADDRESS>
 ```
 
-### Trace Fund Flows
+### Wallet Stats (API)
 
-```rust
-let flows = engine.trace_fund_flows(
-    "source_wallet",
-    "target_wallet"
-).await.unwrap();
-
-for flow in flows {
-    println!("{} -> {} ({})", 
-        flow.from_wallet, 
-        flow.to_wallet, 
-        flow.amount
-    );
-}
+```bash
+curl http://127.0.0.1:8080/transfer/wallet-stats/<WALLET_ADDRESS>
 ```
 
-## Development Roadmap
+### Token Metadata (API)
 
-- [ ] RPC integration with Solana blockchain
-- [ ] SQLx database integration for caching
-- [ ] REST API server
-- [ ] WebAssembly compilation for browser-based analysis
-- [ ] Machine learning models for pattern detection
-- [ ] Visualization dashboard
-- [ ] Multi-chain support (Ethereum, etc.)
-- [ ] Real-time monitoring system
-- [ ] Advanced graph algorithms for wallet clustering
-- [ ] Temporal analysis enhancements
+```bash
+curl http://127.0.0.1:8080/metadata/token/<MINT_ADDRESS>
+```
+
+### Telegram Bot (Optional)
+
+```bash
+export TELEGRAM_BOT_TOKEN="<YOUR_TOKEN>"
+export ONCHAIN_BEAST_API_BASE="http://127.0.0.1:8080"  # optional
+./target/release/telegram_bot
+```
+
+## Next Optional Enhancements
+
+- API authentication (JWT / API keys)
+- TLS/HTTPS termination
+- WebSocket streaming
+- Dashboard UI
 
 ## Performance Characteristics
 

@@ -22,7 +22,11 @@ impl Database {
     }
 
     pub async fn save_transaction(&self, signature: &str, data: &str) -> Result<()> {
-        tracing::debug!("Saving transaction: {} with {} bytes", signature, data.len());
+        tracing::debug!(
+            "Saving transaction: {} with {} bytes",
+            signature,
+            data.len()
+        );
         Ok(())
     }
 }

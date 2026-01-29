@@ -1,7 +1,6 @@
 /// API Key Authentication Middleware
 ///
 /// Validates API keys from request headers and enforces authentication
-
 use actix_web::{
     body::{BoxBody, MessageBody},
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
@@ -91,7 +90,7 @@ where
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
         let path = req.path().to_string();
-        
+
         // Check if endpoint is public
         if self.public_endpoints.contains(&path) {
             let fut = self.service.call(req);
@@ -124,7 +123,7 @@ where
             Some(key) if valid_keys.contains(&key) => {
                 // Store API key in request extensions for later use
                 req.extensions_mut().insert(ApiKey(key.clone()));
-                
+
                 let fut = self.service.call(req);
                 Box::pin(async move {
                     let res = fut.await?;
@@ -135,11 +134,10 @@ where
                 // Invalid API key
                 let (req, _pl) = req.into_parts();
                 Box::pin(async move {
-                    let response = HttpResponse::Unauthorized()
-                        .json(serde_json::json!({
-                            "error": "Invalid API key",
-                            "message": "The provided API key is not valid"
-                        }));
+                    let response = HttpResponse::Unauthorized().json(serde_json::json!({
+                        "error": "Invalid API key",
+                        "message": "The provided API key is not valid"
+                    }));
                     Ok(ServiceResponse::new(req, response.map_into_boxed_body()))
                 })
             }
@@ -147,11 +145,10 @@ where
                 // Missing API key
                 let (req, _pl) = req.into_parts();
                 Box::pin(async move {
-                    let response = HttpResponse::Unauthorized()
-                        .json(serde_json::json!({
-                            "error": "Missing API key",
-                            "message": "API key required. Include 'X-API-Key' header in your request"
-                        }));
+                    let response = HttpResponse::Unauthorized().json(serde_json::json!({
+                        "error": "Missing API key",
+                        "message": "API key required. Include 'X-API-Key' header in your request"
+                    }));
                     Ok(ServiceResponse::new(req, response.map_into_boxed_body()))
                 })
             }

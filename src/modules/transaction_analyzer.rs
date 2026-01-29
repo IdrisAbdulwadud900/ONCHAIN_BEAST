@@ -5,7 +5,6 @@
 /// - Track fund flows between wallets
 /// - Detect transaction patterns and anomalies
 /// - Build transaction graphs
-
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
@@ -36,7 +35,12 @@ impl TransactionAnalyzer {
     }
 
     /// Analyze transaction flow from one wallet to another
-    pub fn analyze_flow(&self, from: &str, to: &str, _transactions: &[Transaction]) -> TransactionFlowAnalysis {
+    pub fn analyze_flow(
+        &self,
+        from: &str,
+        to: &str,
+        _transactions: &[Transaction],
+    ) -> TransactionFlowAnalysis {
         TransactionFlowAnalysis {
             from_wallet: from.to_string(),
             to_wallet: to.to_string(),
@@ -50,19 +54,21 @@ impl TransactionAnalyzer {
     /// Detect suspicious transaction patterns
     pub fn detect_anomalies(&self, transactions: &[Transaction]) -> Vec<TransactionAnomaly> {
         let mut anomalies = Vec::new();
-        
+
         if transactions.is_empty() {
             return anomalies;
         }
-        
+
         // Calculate statistics
         let amounts: Vec<u64> = transactions.iter().map(|t| t.amount).collect();
         let mean_amount = amounts.iter().sum::<u64>() as f64 / amounts.len() as f64;
-        let variance = amounts.iter()
+        let variance = amounts
+            .iter()
             .map(|&a| (a as f64 - mean_amount).powi(2))
-            .sum::<f64>() / amounts.len() as f64;
+            .sum::<f64>()
+            / amounts.len() as f64;
         let std_dev = variance.sqrt();
-        
+
         // Detect anomalies
         for transaction in transactions {
             // Unusual amount (> 3 std devs from mean)
@@ -73,7 +79,7 @@ impl TransactionAnalyzer {
                     severity: ((transaction.amount as f64 - mean_amount).abs() / std_dev) / 3.0,
                 });
             }
-            
+
             // Large transfers (> 5x mean)
             if transaction.amount as f64 > mean_amount * 5.0 {
                 anomalies.push(TransactionAnomaly {
@@ -83,7 +89,7 @@ impl TransactionAnalyzer {
                 });
             }
         }
-        
+
         anomalies
     }
 }

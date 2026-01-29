@@ -1,12 +1,12 @@
 /// Rate Limiting Middleware
 ///
 /// Implements per-IP and per-API-key rate limiting using token bucket algorithm
-
 use actix_web::{
     body::{BoxBody, MessageBody},
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error, HttpMessage, HttpResponse,
 };
+use dashmap::DashMap;
 use futures::future::LocalBoxFuture;
 use governor::{
     clock::DefaultClock,
@@ -17,7 +17,6 @@ use std::future::{ready, Ready};
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use dashmap::DashMap;
 
 use super::auth::ApiKey;
 
@@ -42,9 +41,11 @@ impl Default for RateLimiterConfig {
 pub struct RateLimiter {
     config: RateLimiterConfig,
     // Per-IP rate limiters
-    ip_limiters: Arc<DashMap<IpAddr, Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>,
+    ip_limiters:
+        Arc<DashMap<IpAddr, Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>,
     // Per-API-key rate limiters
-    api_key_limiters: Arc<DashMap<String, Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>,
+    api_key_limiters:
+        Arc<DashMap<String, Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>,
 }
 
 impl RateLimiter {
@@ -63,26 +64,31 @@ impl RateLimiter {
     }
 
     /// Get or create rate limiter for IP address
-    fn get_ip_limiter(&self, ip: IpAddr) -> Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>> {
+    fn get_ip_limiter(
+        &self,
+        ip: IpAddr,
+    ) -> Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>> {
         self.ip_limiters
             .entry(ip)
             .or_insert_with(|| {
-                let quota = Quota::per_minute(
-                    NonZeroU32::new(self.config.requests_per_minute).unwrap()
-                );
+                let quota =
+                    Quota::per_minute(NonZeroU32::new(self.config.requests_per_minute).unwrap());
                 Arc::new(GovernorRateLimiter::direct(quota))
             })
             .clone()
     }
 
     /// Get or create rate limiter for API key
-    fn get_api_key_limiter(&self, api_key: &str) -> Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>> {
+    fn get_api_key_limiter(
+        &self,
+        api_key: &str,
+    ) -> Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>> {
         self.api_key_limiters
             .entry(api_key.to_string())
             .or_insert_with(|| {
                 // API keys get higher rate limits
                 let quota = Quota::per_minute(
-                    NonZeroU32::new(self.config.requests_per_minute * 5).unwrap()
+                    NonZeroU32::new(self.config.requests_per_minute * 5).unwrap(),
                 );
                 Arc::new(GovernorRateLimiter::direct(quota))
             })
@@ -121,8 +127,10 @@ where
 pub struct RateLimiterMiddleware<S> {
     service: S,
     config: RateLimiterConfig,
-    ip_limiters: Arc<DashMap<IpAddr, Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>,
-    api_key_limiters: Arc<DashMap<String, Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>,
+    ip_limiters:
+        Arc<DashMap<IpAddr, Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>,
+    api_key_limiters:
+        Arc<DashMap<String, Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>,
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimiterMiddleware<S>
@@ -143,11 +151,12 @@ where
 
         if let Some(key) = api_key {
             // Use API key rate limiter
-            let limiter = self.api_key_limiters
+            let limiter = self
+                .api_key_limiters
                 .entry(key)
                 .or_insert_with(|| {
                     let quota = Quota::per_minute(
-                        NonZeroU32::new(self.config.requests_per_minute * 5).unwrap()
+                        NonZeroU32::new(self.config.requests_per_minute * 5).unwrap(),
                     );
                     Arc::new(GovernorRateLimiter::direct(quota))
                 })
@@ -164,12 +173,11 @@ where
                 Err(_) => {
                     let (req, _pl) = req.into_parts();
                     Box::pin(async move {
-                        let response = HttpResponse::TooManyRequests()
-                            .json(serde_json::json!({
-                                "error": "Rate limit exceeded",
-                                "message": "Too many requests. Please slow down.",
-                                "limit": "300 requests per minute for authenticated users"
-                            }));
+                        let response = HttpResponse::TooManyRequests().json(serde_json::json!({
+                            "error": "Rate limit exceeded",
+                            "message": "Too many requests. Please slow down.",
+                            "limit": "300 requests per minute for authenticated users"
+                        }));
                         Ok(ServiceResponse::new(req, response.map_into_boxed_body()))
                     })
                 }
@@ -179,11 +187,12 @@ where
             let peer_addr = req.peer_addr().map(|addr| addr.ip());
 
             if let Some(ip) = peer_addr {
-                let limiter = self.ip_limiters
+                let limiter = self
+                    .ip_limiters
                     .entry(ip)
                     .or_insert_with(|| {
                         let quota = Quota::per_minute(
-                            NonZeroU32::new(self.config.requests_per_minute).unwrap()
+                            NonZeroU32::new(self.config.requests_per_minute).unwrap(),
                         );
                         Arc::new(GovernorRateLimiter::direct(quota))
                     })

@@ -1,0 +1,18 @@
+[Unit]
+Description=OnChain Beast - Solana Transaction Analyzer
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=onchain
+WorkingDirectory=/opt/onchain_beast
+ExecStart=/opt/onchain_beast/target/release/onchain_beast
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=/opt/onchain_beast/.env
+
+[Install]
+WantedBy=multi-user.target

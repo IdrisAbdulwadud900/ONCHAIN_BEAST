@@ -1,20 +1,24 @@
 /// REST API Server for OnChain Beast
 ///
 /// Provides HTTP endpoints for wallet analysis, transaction tracing, and pattern detection
-
-use actix_web::{web, App, HttpServer, HttpResponse, middleware};
+use actix_web::{middleware, web, App, HttpResponse, HttpServer};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 
-use crate::core::rpc_client::SolanaRpcClient;
-use crate::core::config::Config;
-use crate::database::storage::Database;
 use crate::analysis::AnalysisEngine;
-use crate::cache::CacheManager;
-use crate::middleware::{RateLimiter, RateLimiterConfig, RequestId};
 use crate::auth::ApiKey;
-use crate::modules::TransactionHandler;
+use crate::cache::CacheManager;
+use crate::core::config::Config;
+use crate::core::rpc_client::SolanaRpcClient;
+use crate::core::TokenMetadataService;
+use crate::database::storage::Database;
+use crate::middleware::{RateLimiter, RateLimiterConfig, RequestId};
+use crate::modules::{
+    AnalysisService, PatternDetector, TokenMetadataServiceEnhanced, TransactionGraphBuilder,
+    TransactionHandler, TransferAnalytics,
+};
+use crate::storage::{DatabaseManager, RedisCache};
 
 /// API server state
 pub struct ApiState {
@@ -23,6 +27,10 @@ pub struct ApiState {
     pub analysis_engine: Arc<RwLock<AnalysisEngine>>,
     pub cache: Arc<CacheManager>,
     pub transaction_handler: Arc<RwLock<TransactionHandler>>,
+    pub db_manager: Arc<DatabaseManager>,
+    pub redis_cache: Arc<RedisCache>,
+    pub token_metadata_service: Arc<TokenMetadataServiceEnhanced>,
+    pub analysis_service: Arc<AnalysisService>,
 }
 
 /// Start the REST API server
@@ -32,20 +40,37 @@ pub async fn start_server(
     database: Arc<RwLock<Database>>,
     analysis_engine: Arc<RwLock<AnalysisEngine>>,
     cache: Arc<CacheManager>,
+    db_manager: Arc<DatabaseManager>,
+    redis_cache: Arc<RedisCache>,
     host: &str,
     port: u16,
 ) -> std::io::Result<()> {
     let rpc_url = config.rpc_endpoint.clone();
-    let transaction_handler = Arc::new(RwLock::new(
-        TransactionHandler::new(Arc::clone(&rpc_client), rpc_url)
+    let transaction_handler = Arc::new(RwLock::new(TransactionHandler::new(
+        Arc::clone(&rpc_client),
+        rpc_url.clone(),
+    )));
+
+    // Initialize token metadata service with Phase 5 infrastructure
+    let metadata_service = TokenMetadataService::new(rpc_url);
+    metadata_service.preload_common_tokens().await;
+    let token_metadata_service = Arc::new(TokenMetadataServiceEnhanced::new(
+        metadata_service,
+        Arc::clone(&db_manager),
+        Arc::clone(&redis_cache),
     ));
-    
-    // Preload common token metadata
-    {
-        let handler = transaction_handler.read().await;
-        handler.preload_token_metadata().await;
-        info!("✅ Preloaded common token metadata");
-    }
+    info!("✅ Initialized enhanced token metadata service with caching and persistence");
+
+    // Initialize analysis service with Phase 5 infrastructure
+    let pattern_detector = Arc::new(PatternDetector::new());
+    let graph_builder = Arc::new(TransactionGraphBuilder::new());
+    let analysis_service = Arc::new(AnalysisService::new(
+        pattern_detector,
+        graph_builder,
+        Arc::clone(&db_manager),
+        Arc::clone(&redis_cache),
+    ));
+    info!("✅ Initialized analysis service with caching and metrics");
 
     let state = web::Data::new(ApiState {
         rpc_client,
@@ -53,6 +78,10 @@ pub async fn start_server(
         analysis_engine,
         cache,
         transaction_handler: Arc::clone(&transaction_handler),
+        db_manager: Arc::clone(&db_manager),
+        redis_cache: Arc::clone(&redis_cache),
+        token_metadata_service,
+        analysis_service,
     });
 
     info!("🌐 Starting REST API server on {}:{}", host, port);
@@ -67,6 +96,9 @@ pub async fn start_server(
         let mut app = App::new()
             .app_data(state.clone())
             .app_data(web::Data::new(Arc::clone(&transaction_handler)))
+            // Expose raw shared services for route modules that use Data<Arc<T>> directly.
+            .app_data(web::Data::new(Arc::clone(&db_manager)))
+            .app_data(web::Data::new(Arc::clone(&redis_cache)))
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
             .wrap(RequestId::new())
@@ -74,40 +106,99 @@ pub async fn start_server(
 
         // Configure transaction parsing routes
         app = app.configure(crate::api::parse_routes::configure);
-        
+
         // Configure analysis routes
         app = app.configure(crate::api::analysis_routes::configure);
+
+        // Configure metrics routes
+        app = app.configure(crate::api::metrics_routes::configure_metrics_routes);
+
+        // Configure transfer analytics routes
+        app = app.configure(crate::api::transfer_routes::configure);
+
+        // Configure token metadata routes
+        app = app.configure(crate::api::metadata_routes::configure);
+
+        // Configure enhanced analysis API routes
+        app = app.configure(crate::api::analysis_api_enhanced::configure);
 
         app
             // Note: Authentication is now handled via extractors in individual handlers
             // Health check endpoints (public - no auth required)
             .route("/health", web::get().to(handlers::health_check))
-
             .route("/status", web::get().to(handlers::get_status))
             // Wallet analysis endpoints
-            .route("/api/v1/analyze/wallet/{address}", web::get().to(handlers::analyze_wallet))
-            .route("/api/v1/analyze/wallet", web::post().to(handlers::analyze_wallet_post))
-            .route("/api/v1/wallet/{address}/risk", web::get().to(handlers::get_wallet_risk))
-            .route("/api/v1/wallet/{address}/transactions", web::get().to(handlers::get_wallet_transactions))
+            .route(
+                "/api/v1/analyze/wallet/{address}",
+                web::get().to(handlers::analyze_wallet),
+            )
+            .route(
+                "/api/v1/analyze/wallet",
+                web::post().to(handlers::analyze_wallet_post),
+            )
+            .route(
+                "/api/v1/wallet/{address}/risk",
+                web::get().to(handlers::get_wallet_risk),
+            )
+            .route(
+                "/api/v1/wallet/{address}/transactions",
+                web::get().to(handlers::get_wallet_transactions),
+            )
             // Side wallet detection
-            .route("/api/v1/wallet/{address}/side-wallets", web::get().to(handlers::find_side_wallets))
-            .route("/api/v1/wallet/{address}/cluster", web::get().to(handlers::get_wallet_cluster))
+            .route(
+                "/api/v1/wallet/{address}/side-wallets",
+                web::get().to(handlers::find_side_wallets),
+            )
+            .route(
+                "/api/v1/wallet/{address}/cluster",
+                web::get().to(handlers::get_wallet_cluster),
+            )
             // Exchange and fund tracing
             .route("/api/v1/trace/funds", web::post().to(handlers::trace_funds))
-            .route("/api/v1/trace/exchange-routes", web::post().to(handlers::trace_exchange_routes))
+            .route(
+                "/api/v1/trace/exchange-routes",
+                web::post().to(handlers::trace_exchange_routes),
+            )
             // Pattern detection
-            .route("/api/v1/detect/patterns", web::post().to(handlers::detect_patterns))
-            .route("/api/v1/detect/anomalies", web::get().to(handlers::detect_anomalies))
-            .route("/api/v1/detect/wash-trading/{address}", web::get().to(handlers::detect_wash_trading))
+            .route(
+                "/api/v1/detect/patterns",
+                web::post().to(handlers::detect_patterns),
+            )
+            .route(
+                "/api/v1/detect/anomalies",
+                web::get().to(handlers::detect_anomalies),
+            )
+            .route(
+                "/api/v1/detect/wash-trading/{address}",
+                web::get().to(handlers::detect_wash_trading),
+            )
             // Network analysis
-            .route("/api/v1/network/metrics", web::get().to(handlers::get_network_metrics))
-            .route("/api/v1/network/analysis", web::post().to(handlers::network_analysis))
+            .route(
+                "/api/v1/network/metrics",
+                web::get().to(handlers::get_network_metrics),
+            )
+            .route(
+                "/api/v1/network/analysis",
+                web::post().to(handlers::network_analysis),
+            )
             // Account info
-            .route("/api/v1/account/{address}/balance", web::get().to(handlers::get_account_balance))
-            .route("/api/v1/account/{address}/info", web::get().to(handlers::get_account_info))
+            .route(
+                "/api/v1/account/{address}/balance",
+                web::get().to(handlers::get_account_balance),
+            )
+            .route(
+                "/api/v1/account/{address}/info",
+                web::get().to(handlers::get_account_info),
+            )
             // Cluster info
-            .route("/api/v1/cluster/info", web::get().to(handlers::get_cluster_info))
-            .route("/api/v1/cluster/health", web::get().to(handlers::cluster_health))
+            .route(
+                "/api/v1/cluster/info",
+                web::get().to(handlers::get_cluster_info),
+            )
+            .route(
+                "/api/v1/cluster/health",
+                web::get().to(handlers::cluster_health),
+            )
             // Root endpoint
             .route("/", web::get().to(handlers::index))
     })
@@ -118,7 +209,172 @@ pub async fn start_server(
 
 pub mod handlers {
     use super::*;
+    use serde::Deserialize;
     use serde_json::json;
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    #[derive(Debug, Deserialize)]
+    pub struct SideWalletQuery {
+        /// Graph expansion depth (1-3 recommended)
+        pub depth: Option<usize>,
+        /// Minimum score (0.0-1.0)
+        pub threshold: Option<f64>,
+        /// Max results returned
+        pub limit: Option<usize>,
+        /// If true, fetch & ingest recent transactions first
+        pub bootstrap: Option<bool>,
+        /// Number of recent signatures to ingest when bootstrap=true
+        pub bootstrap_limit: Option<u64>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct SideWalletCandidate {
+        address: String,
+        score: f64,
+        depth: usize,
+        reasons: Vec<String>,
+        tx_count: u32,
+        total_sol: f64,
+        total_token: u64,
+    }
+
+    fn clamp01(x: f64) -> f64 {
+        if x.is_nan() {
+            return 0.0;
+        }
+        x.max(0.0).min(1.0)
+    }
+
+    fn edge_score(tx_count: u32, total_sol: f64, total_token: u64) -> f64 {
+        // Lightweight heuristic score based on activity and volume.
+        // Output is [0,1].
+        let tx = (tx_count as f64 + 1.0).ln();
+        let sol = (total_sol.abs() + 1.0).ln();
+        let token = ((total_token as f64) / 1_000_000.0 + 1.0).ln();
+        let raw = tx * 0.65 + sol * 0.30 + token * 0.05;
+        clamp01(1.0 - (-raw / 3.0).exp())
+    }
+
+    fn build_reason(
+        from: &str,
+        to: &str,
+        tx_count: u32,
+        total_sol: f64,
+        total_token: u64,
+    ) -> String {
+        if total_sol > 0.0 {
+            format!(
+                "Link: {} ↔ {} ({} tx, {:.4} SOL)",
+                from, to, tx_count, total_sol
+            )
+        } else if total_token > 0 {
+            format!(
+                "Link: {} ↔ {} ({} tx, {} token units)",
+                from, to, tx_count, total_token
+            )
+        } else {
+            format!("Link: {} ↔ {} ({} tx)", from, to, tx_count)
+        }
+    }
+
+    async fn compute_side_wallets(
+        state: &ApiState,
+        main_wallet: &str,
+        max_depth: usize,
+        threshold: f64,
+        limit: usize,
+    ) -> Result<Vec<SideWalletCandidate>, String> {
+        let max_depth = max_depth.clamp(1, 5);
+        let threshold = clamp01(threshold);
+        let limit = limit.clamp(1, 100);
+
+        // BFS over wallet_relationships graph.
+        let mut queue: VecDeque<(String, usize, f64)> = VecDeque::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut best: HashMap<String, SideWalletCandidate> = HashMap::new();
+
+        queue.push_back((main_wallet.to_string(), 0, 1.0));
+        visited.insert(main_wallet.to_string());
+
+        while let Some((current, depth, parent_score)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+
+            let connections = state
+                .db_manager
+                .get_wallet_connections(&current)
+                .await
+                .map_err(|e| format!("Failed to get connections: {}", e))?;
+
+            for conn in connections {
+                let (from, to) = (&conn.from_wallet, &conn.to_wallet);
+                let other = if from == &current { to } else { from };
+                if other == main_wallet {
+                    continue;
+                }
+
+                let s = edge_score(
+                    conn.transaction_count,
+                    conn.total_sol_transferred,
+                    conn.total_token_transferred,
+                );
+                let combined = clamp01(parent_score * s * (0.85_f64).powi((depth as i32) + 1));
+                if combined < threshold {
+                    continue;
+                }
+
+                let reason = build_reason(
+                    from,
+                    to,
+                    conn.transaction_count,
+                    conn.total_sol_transferred,
+                    conn.total_token_transferred,
+                );
+
+                let entry = best
+                    .entry(other.to_string())
+                    .or_insert_with(|| SideWalletCandidate {
+                        address: other.to_string(),
+                        score: combined,
+                        depth: depth + 1,
+                        reasons: Vec::new(),
+                        tx_count: conn.transaction_count,
+                        total_sol: conn.total_sol_transferred,
+                        total_token: conn.total_token_transferred,
+                    });
+
+                // Keep best score, but also accumulate evidence.
+                if combined > entry.score {
+                    entry.score = combined;
+                    entry.depth = depth + 1;
+                    entry.tx_count = conn.transaction_count;
+                    entry.total_sol = conn.total_sol_transferred;
+                    entry.total_token = conn.total_token_transferred;
+                }
+                if entry.reasons.len() < 5 {
+                    entry.reasons.push(reason);
+                }
+
+                if !visited.contains(other) {
+                    visited.insert(other.to_string());
+                    queue.push_back((other.to_string(), depth + 1, combined));
+                }
+            }
+        }
+
+        let mut results: Vec<SideWalletCandidate> = best
+            .into_values()
+            .filter(|c| c.score >= threshold)
+            .collect();
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
+        Ok(results)
+    }
 
     /// Root endpoint
     pub async fn index() -> HttpResponse {
@@ -177,10 +433,13 @@ pub mod handlers {
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                     "cached": false
                 });
-                
+
                 // Cache the response
-                state.cache.cluster_cache.set(cache_key.to_string(), response.clone());
-                
+                state
+                    .cache
+                    .cluster_cache
+                    .set(cache_key.to_string(), response.clone());
+
                 HttpResponse::Ok().json(response)
             }
             Err(e) => HttpResponse::InternalServerError().json(json!({
@@ -196,7 +455,7 @@ pub mod handlers {
         address: web::Path<String>,
     ) -> HttpResponse {
         let wallet_address = address.into_inner();
-        
+
         // Check cache first
         let cache_key = format!("account_{}", wallet_address);
         if let Some(cached) = state.cache.account_cache.get(&cache_key) {
@@ -206,7 +465,7 @@ pub mod handlers {
             }
             return HttpResponse::Ok().json(response);
         }
-        
+
         match state.rpc_client.get_account_info(&wallet_address).await {
             Ok(account) => {
                 let response = json!({
@@ -218,10 +477,10 @@ pub mod handlers {
                     "analysis_ready": true,
                     "cached": false
                 });
-                
+
                 // Cache the response
                 state.cache.account_cache.set(cache_key, response.clone());
-                
+
                 HttpResponse::Ok().json(response)
             }
             Err(e) => HttpResponse::NotFound().json(json!({
@@ -274,7 +533,7 @@ pub mod handlers {
         address: web::Path<String>,
     ) -> HttpResponse {
         let wallet = address.into_inner();
-        
+
         // Calculate risk based on wallet activity
         match state.rpc_client.get_signatures(&wallet, 200u64).await {
             Ok(sigs) => {
@@ -313,20 +572,18 @@ pub mod handlers {
         let limit = query.limit.unwrap_or(10).min(100) as u64;
 
         match state.rpc_client.get_signatures(&wallet, limit).await {
-            Ok(sigs) => {
-                HttpResponse::Ok().json(json!({
-                    "wallet": wallet,
-                    "transactions": sigs.iter()
-                        .map(|s| json!({
-                            "signature": s.signature,
-                            "slot": s.slot,
-                            "block_time": s.block_time
-                        }))
-                        .collect::<Vec<_>>(),
-                    "total": sigs.len(),
-                    "returned": sigs.len().min(limit as usize)
-                }))
-            }
+            Ok(sigs) => HttpResponse::Ok().json(json!({
+                "wallet": wallet,
+                "transactions": sigs.iter()
+                    .map(|s| json!({
+                        "signature": s.signature,
+                        "slot": s.slot,
+                        "block_time": s.block_time
+                    }))
+                    .collect::<Vec<_>>(),
+                "total": sigs.len(),
+                "returned": sigs.len().min(limit as usize)
+            })),
             Err(e) => HttpResponse::InternalServerError().json(json!({
                 "error": e.to_string()
             })),
@@ -339,17 +596,102 @@ pub mod handlers {
         _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         address: web::Path<String>,
+        query: web::Query<SideWalletQuery>,
     ) -> HttpResponse {
         let wallet = address.into_inner();
 
-        // This would integrate with the graph analysis engine
-        HttpResponse::Ok().json(json!({
-            "main_wallet": wallet,
-            "side_wallets": [],
-            "confidence_threshold": 0.7,
-            "analysis_depth": 3,
-            "message": "Graph analysis integration pending"
-        }))
+        let depth = query.depth.unwrap_or(2);
+        let threshold = query.threshold.unwrap_or(0.10);
+        let limit = query.limit.unwrap_or(15);
+        let bootstrap = query.bootstrap.unwrap_or(true);
+        let bootstrap_limit = query.bootstrap_limit.unwrap_or(25).min(100);
+
+        // Optional bootstrap: fetch recent signatures, parse transactions, and persist relationships.
+        let mut ingested = 0usize;
+        let mut bootstrap_signatures = 0usize;
+        let mut parsed_ok = 0usize;
+        let mut parsed_failed = 0usize;
+        let mut persisted_failed = 0usize;
+        let mut bootstrap_errors: Vec<String> = Vec::new();
+
+        if bootstrap {
+            match state
+                .rpc_client
+                .get_signatures(&wallet, bootstrap_limit)
+                .await
+            {
+                Ok(sigs) => {
+                    bootstrap_signatures = sigs.len();
+                    let analytics =
+                        TransferAnalytics::new(state.db_manager.clone(), state.redis_cache.clone());
+                    let handler = state.transaction_handler.read().await;
+
+                    for s in sigs {
+                        match handler.process_transaction(&s.signature, None).await {
+                            Ok(tx) => {
+                                parsed_ok += 1;
+                                match analytics.analyze_transaction(&tx).await {
+                                    Ok(_) => {
+                                        ingested += 1;
+                                    }
+                                    Err(e) => {
+                                        persisted_failed += 1;
+                                        if bootstrap_errors.len() < 3 {
+                                            bootstrap_errors
+                                                .push(format!("persist {}: {}", s.signature, e));
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                parsed_failed += 1;
+                                if bootstrap_errors.len() < 3 {
+                                    bootstrap_errors.push(format!("parse {}: {}", s.signature, e));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Side-wallet bootstrap failed for {}: {}", wallet, e);
+                    bootstrap_errors.push(format!("get_signatures: {}", e));
+                }
+            }
+        }
+
+        match compute_side_wallets(&state, &wallet, depth, threshold, limit).await {
+            Ok(candidates) => {
+                HttpResponse::Ok().json(json!({
+                    "main_wallet": wallet,
+                    "side_wallets": candidates.iter().map(|c| json!({
+                        "address": c.address,
+                        "score": c.score,
+                        "depth": c.depth,
+                        "tx_count": c.tx_count,
+                        "total_sol": c.total_sol,
+                        "total_token": c.total_token,
+                        "reasons": c.reasons,
+                    })).collect::<Vec<_>>(),
+                    "confidence_threshold": threshold,
+                    "analysis_depth": depth,
+                    "bootstrap": bootstrap,
+                    "bootstrap_ingested_transactions": ingested,
+                    "bootstrap_signatures": bootstrap_signatures,
+                    "bootstrap_parsed_ok": parsed_ok,
+                    "bootstrap_parsed_failed": parsed_failed,
+                    "bootstrap_persisted_failed": persisted_failed,
+                    "bootstrap_errors": bootstrap_errors,
+                    "message": if candidates.is_empty() {
+                        "No side-wallet candidates yet. Increase bootstrap_limit or try again after ingesting more transactions."
+                    } else {
+                        "OK"
+                    }
+                }))
+            }
+            Err(e) => HttpResponse::InternalServerError().json(json!({
+                "error": e
+            })),
+        }
     }
 
     /// Get wallet cluster
@@ -358,16 +700,123 @@ pub mod handlers {
         _auth: ApiKey, // Authentication required
         state: web::Data<ApiState>,
         address: web::Path<String>,
+        query: web::Query<SideWalletQuery>,
     ) -> HttpResponse {
         let wallet = address.into_inner();
 
-        HttpResponse::Ok().json(json!({
-            "primary_wallet": wallet,
-            "cluster_size": 1,
-            "wallets": [wallet],
-            "connection_strength": 1.0,
-            "message": "Graph analysis integration pending"
-        }))
+        let depth = query.depth.unwrap_or(2);
+        let threshold = query.threshold.unwrap_or(0.10);
+        let limit = query.limit.unwrap_or(30);
+        let bootstrap = query.bootstrap.unwrap_or(true);
+        let bootstrap_limit = query.bootstrap_limit.unwrap_or(25).min(100);
+
+        // Optional bootstrap (same as side-wallet endpoint)
+        let mut ingested = 0usize;
+        let mut bootstrap_signatures = 0usize;
+        let mut parsed_ok = 0usize;
+        let mut parsed_failed = 0usize;
+        let mut persisted_failed = 0usize;
+        let mut bootstrap_errors: Vec<String> = Vec::new();
+
+        if bootstrap {
+            match state
+                .rpc_client
+                .get_signatures(&wallet, bootstrap_limit)
+                .await
+            {
+                Ok(sigs) => {
+                    bootstrap_signatures = sigs.len();
+                    let analytics =
+                        TransferAnalytics::new(state.db_manager.clone(), state.redis_cache.clone());
+                    let handler = state.transaction_handler.read().await;
+                    for s in sigs {
+                        match handler.process_transaction(&s.signature, None).await {
+                            Ok(tx) => {
+                                parsed_ok += 1;
+                                match analytics.analyze_transaction(&tx).await {
+                                    Ok(_) => {
+                                        ingested += 1;
+                                    }
+                                    Err(e) => {
+                                        persisted_failed += 1;
+                                        if bootstrap_errors.len() < 3 {
+                                            bootstrap_errors
+                                                .push(format!("persist {}: {}", s.signature, e));
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                parsed_failed += 1;
+                                if bootstrap_errors.len() < 3 {
+                                    bootstrap_errors.push(format!("parse {}: {}", s.signature, e));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Cluster bootstrap failed for {}: {}", wallet, e);
+                    bootstrap_errors.push(format!("get_signatures: {}", e));
+                }
+            }
+        }
+
+        match compute_side_wallets(&state, &wallet, depth, threshold, limit).await {
+            Ok(mut candidates) => {
+                // Cluster includes the primary wallet plus the discovered candidates.
+                let mut wallets = vec![json!({
+                    "address": wallet,
+                    "score": 1.0,
+                    "depth": 0,
+                    "reasons": ["Primary wallet"],
+                })];
+
+                let mut strength_sum = 0.0;
+                for c in candidates.drain(..) {
+                    strength_sum += c.score;
+                    wallets.push(json!({
+                        "address": c.address,
+                        "score": c.score,
+                        "depth": c.depth,
+                        "tx_count": c.tx_count,
+                        "total_sol": c.total_sol,
+                        "total_token": c.total_token,
+                        "reasons": c.reasons,
+                    }));
+                }
+                let size = wallets.len();
+                let avg_strength = if size > 1 {
+                    strength_sum / ((size - 1) as f64)
+                } else {
+                    1.0
+                };
+
+                HttpResponse::Ok().json(json!({
+                    "primary_wallet": wallet,
+                    "cluster_size": size,
+                    "wallets": wallets,
+                    "connection_strength": avg_strength,
+                    "analysis_depth": depth,
+                    "confidence_threshold": threshold,
+                    "bootstrap": bootstrap,
+                    "bootstrap_ingested_transactions": ingested,
+                    "bootstrap_signatures": bootstrap_signatures,
+                    "bootstrap_parsed_ok": parsed_ok,
+                    "bootstrap_parsed_failed": parsed_failed,
+                    "bootstrap_persisted_failed": persisted_failed,
+                    "bootstrap_errors": bootstrap_errors,
+                    "message": if size <= 1 {
+                        "No cluster expansion yet. Try increasing bootstrap_limit or lowering threshold."
+                    } else {
+                        "OK"
+                    }
+                }))
+            }
+            Err(e) => HttpResponse::InternalServerError().json(json!({
+                "error": e
+            })),
+        }
     }
 
     /// Trace funds
@@ -447,16 +896,14 @@ pub mod handlers {
     /// Get network metrics
     pub async fn get_network_metrics(state: web::Data<ApiState>) -> HttpResponse {
         match state.rpc_client.get_cluster_info().await {
-            Ok(cluster) => {
-                HttpResponse::Ok().json(json!({
-                    "network": "solana",
-                    "cluster": "mainnet-beta",
-                    "active_validators": cluster.total_nodes,
-                    "network_health": "good",
-                    "tps": 400,
-                    "timestamp": chrono::Utc::now().to_rfc3339()
-                }))
-            }
+            Ok(cluster) => HttpResponse::Ok().json(json!({
+                "network": "solana",
+                "cluster": "mainnet-beta",
+                "active_validators": cluster.total_nodes,
+                "network_health": "good",
+                "tps": 400,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            })),
             Err(e) => HttpResponse::InternalServerError().json(json!({
                 "error": e.to_string()
             })),
@@ -487,14 +934,12 @@ pub mod handlers {
         let wallet = address.into_inner();
 
         match state.rpc_client.get_account_info(&wallet).await {
-            Ok(account) => {
-                HttpResponse::Ok().json(json!({
-                    "wallet": wallet,
-                    "balance_lamports": account.balance,
-                    "balance_sol": account.balance as f64 / 1_000_000_000.0,
-                    "owner": account.owner
-                }))
-            }
+            Ok(account) => HttpResponse::Ok().json(json!({
+                "wallet": wallet,
+                "balance_lamports": account.balance,
+                "balance_sol": account.balance as f64 / 1_000_000_000.0,
+                "owner": account.owner
+            })),
             Err(e) => HttpResponse::NotFound().json(json!({
                 "error": e.to_string(),
                 "wallet": wallet
@@ -510,16 +955,14 @@ pub mod handlers {
         let wallet = address.into_inner();
 
         match state.rpc_client.get_account_info(&wallet).await {
-            Ok(account) => {
-                HttpResponse::Ok().json(json!({
-                    "address": wallet,
-                    "balance_lamports": account.balance,
-                    "balance_sol": account.balance as f64 / 1_000_000_000.0,
-                    "owner": account.owner,
-                    "executable": account.executable,
-                    "rent_epoch": account.rent_epoch
-                }))
-            }
+            Ok(account) => HttpResponse::Ok().json(json!({
+                "address": wallet,
+                "balance_lamports": account.balance,
+                "balance_sol": account.balance as f64 / 1_000_000_000.0,
+                "owner": account.owner,
+                "executable": account.executable,
+                "rent_epoch": account.rent_epoch
+            })),
             Err(e) => HttpResponse::NotFound().json(json!({
                 "error": e.to_string()
             })),
@@ -529,14 +972,12 @@ pub mod handlers {
     /// Get cluster info
     pub async fn get_cluster_info(state: web::Data<ApiState>) -> HttpResponse {
         match state.rpc_client.get_cluster_info().await {
-            Ok(cluster) => {
-                HttpResponse::Ok().json(json!({
-                    "cluster": "mainnet-beta",
-                    "total_validators": cluster.total_nodes,
-                    "network_version": "1.18",
-                    "health": "operational"
-                }))
-            }
+            Ok(cluster) => HttpResponse::Ok().json(json!({
+                "cluster": "mainnet-beta",
+                "total_validators": cluster.total_nodes,
+                "network_version": "1.18",
+                "health": "operational"
+            })),
             Err(e) => HttpResponse::InternalServerError().json(json!({
                 "error": e.to_string()
             })),

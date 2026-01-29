@@ -16,10 +16,10 @@ pub enum BeastError {
 
     #[error("Configuration error: {0}")]
     ConfigError(String),
-    
+
     #[error("Parse error: {0}")]
     ParseError(String),
-    
+
     #[error("Not found: {0}")]
     NotFound(String),
 

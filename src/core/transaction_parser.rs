@@ -1,19 +1,17 @@
 /// Transaction Parser Module (Foundation)
 /// Provides basic transaction parsing structure for future enhancement
-/// 
+///
 /// Current capabilities:
 /// - Extract transaction metadata
 /// - Identify account types
 /// - Recognize program calls
-/// 
+///
 /// Planned enhancements:
 /// - Full instruction parsing
 /// - Token transfer detection  
 /// - Fund flow tracing
 /// - Pattern recognition
-
 use serde::{Deserialize, Serialize};
-use crate::core::errors::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedTransaction {
