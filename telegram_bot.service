@@ -1,0 +1,18 @@
+[Unit]
+Description=OnChain Beast - Telegram Bot
+After=network.target onchain_beast.service
+Wants=onchain_beast.service
+
+[Service]
+Type=simple
+User=onchain
+WorkingDirectory=/opt/onchain_beast
+EnvironmentFile=/opt/onchain_beast/.env
+ExecStart=/opt/onchain_beast/target/release/telegram_bot
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

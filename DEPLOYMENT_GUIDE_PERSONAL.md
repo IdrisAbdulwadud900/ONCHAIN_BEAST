@@ -221,6 +221,28 @@ sudo systemctl enable onchain_beast
 systemctl status onchain_beast
 ```
 
+### Telegram Bot as a Service (Recommended for 24/7)
+
+Telegram polling only allows **one** active process per bot token. If you start the bot twice (or run another app with the same token), you will see errors like `TerminatedByOtherGetUpdates`.
+
+```bash
+# Copy service file
+sudo cp telegram_bot.service /etc/systemd/system/
+
+# Ensure your /opt/onchain_beast/.env contains (do not commit this file):
+#   TELEGRAM_BOT_TOKEN=...
+#   ONCHAIN_BEAST_API_BASE=https://your-public-api.example.com   # or http://127.0.0.1:8080 if local
+
+sudo systemctl daemon-reload
+sudo systemctl start telegram_bot
+sudo systemctl enable telegram_bot
+
+systemctl status telegram_bot
+
+# View logs
+journalctl -u telegram_bot -f
+```
+
 ---
 
 ## Testing
