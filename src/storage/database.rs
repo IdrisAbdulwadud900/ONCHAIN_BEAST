@@ -1,4 +1,4 @@
-use crate::core::enhanced_parser::EnhancedTransaction;
+use crate::core::enhanced_parser::{EnhancedTransaction, SolTransfer, TokenTransfer};
 use crate::core::errors::{BeastError, BeastResult};
 use crate::modules::pattern_detector::PatternAnalysisResult;
 use crate::modules::transaction_graph_builder::FundFlowGraph;
@@ -135,6 +135,71 @@ impl DatabaseManager {
             .ok();
         self.client
             .execute("CREATE INDEX IF NOT EXISTS idx_wallet_relationships_to ON wallet_relationships(to_wallet)", &[])
+            .await
+            .ok();
+
+        // Create transfer_events table (event-level transfers)
+        self.client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS transfer_events (
+                    id SERIAL PRIMARY KEY,
+                    signature TEXT NOT NULL,
+                    event_index INTEGER NOT NULL,
+                    slot BIGINT NOT NULL,
+                    block_time BIGINT,
+                    kind TEXT NOT NULL,
+                    instruction_index INTEGER NOT NULL,
+                    transfer_type TEXT NOT NULL,
+                    from_wallet TEXT,
+                    to_wallet TEXT,
+                    mint TEXT,
+                    amount_lamports BIGINT,
+                    amount_sol DOUBLE PRECISION,
+                    token_amount BIGINT,
+                    token_decimals INTEGER,
+                    token_amount_ui DOUBLE PRECISION,
+                    from_token_account TEXT,
+                    to_token_account TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(signature, event_index)
+                )",
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                BeastError::DatabaseError(format!(
+                    "Failed to create transfer_events table: {}",
+                    e
+                ))
+            })?;
+
+        // Create indexes on transfer_events
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_transfer_events_signature ON transfer_events(signature)",
+                &[],
+            )
+            .await
+            .ok();
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_transfer_events_from_wallet ON transfer_events(from_wallet)",
+                &[],
+            )
+            .await
+            .ok();
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_transfer_events_to_wallet ON transfer_events(to_wallet)",
+                &[],
+            )
+            .await
+            .ok();
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_transfer_events_block_time ON transfer_events(block_time)",
+                &[],
+            )
             .await
             .ok();
 
@@ -318,6 +383,206 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Store a SOL transfer as an event (idempotent per signature+event_index)
+    pub async fn store_sol_transfer_event(
+        &self,
+        tx: &EnhancedTransaction,
+        transfer: &SolTransfer,
+        event_index: i32,
+    ) -> BeastResult<()> {
+        self.client
+            .execute(
+                "INSERT INTO transfer_events (
+                    signature,
+                    event_index,
+                    slot,
+                    block_time,
+                    kind,
+                    instruction_index,
+                    transfer_type,
+                    from_wallet,
+                    to_wallet,
+                    amount_lamports,
+                    amount_sol
+                 ) VALUES ($1,$2,$3,$4,'sol',$5,$6,$7,$8,$9,$10)
+                 ON CONFLICT (signature, event_index) DO NOTHING",
+                &[
+                    &tx.signature,
+                    &event_index,
+                    &(tx.slot as i64),
+                    &tx.block_time.map(|t| t as i64),
+                    &(transfer.instruction_index as i32),
+                    &transfer.transfer_type,
+                    &transfer.from,
+                    &transfer.to,
+                    &(transfer.amount_lamports as i64),
+                    &transfer.amount_sol,
+                ],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to store SOL transfer event: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Store a token transfer as an event (idempotent per signature+event_index)
+    pub async fn store_token_transfer_event(
+        &self,
+        tx: &EnhancedTransaction,
+        transfer: &TokenTransfer,
+        event_index: i32,
+    ) -> BeastResult<()> {
+        let from_wallet = transfer.from_owner.as_deref();
+        let to_wallet = transfer.to_owner.as_deref();
+
+        self.client
+            .execute(
+                "INSERT INTO transfer_events (
+                    signature,
+                    event_index,
+                    slot,
+                    block_time,
+                    kind,
+                    instruction_index,
+                    transfer_type,
+                    from_wallet,
+                    to_wallet,
+                    mint,
+                    token_amount,
+                    token_decimals,
+                    token_amount_ui,
+                    from_token_account,
+                    to_token_account
+                 ) VALUES ($1,$2,$3,$4,'token',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                 ON CONFLICT (signature, event_index) DO NOTHING",
+                &[
+                    &tx.signature,
+                    &event_index,
+                    &(tx.slot as i64),
+                    &tx.block_time.map(|t| t as i64),
+                    &(transfer.instruction_index as i32),
+                    &transfer.transfer_type,
+                    &from_wallet,
+                    &to_wallet,
+                    &transfer.mint,
+                    &(transfer.amount as i64),
+                    &(transfer.decimals as i32),
+                    &transfer.amount_ui,
+                    &transfer.from_token_account,
+                    &transfer.to_token_account,
+                ],
+            )
+            .await
+            .map_err(|e| {
+                BeastError::DatabaseError(format!("Failed to store token transfer event: {}", e))
+            })?;
+
+        Ok(())
+    }
+
+    /// Find shared inbound funders (wallets that sent to both A and B)
+    pub async fn get_shared_inbound_senders(
+        &self,
+        wallet_a: &str,
+        wallet_b: &str,
+        since_epoch: Option<u64>,
+        limit: usize,
+    ) -> BeastResult<Vec<SharedWalletSignal>> {
+        let since_epoch = since_epoch.unwrap_or(0) as i64;
+        let limit = (limit as i64).clamp(1, 50);
+
+        let rows = self
+            .client
+            .query(
+                "WITH a AS (
+                    SELECT from_wallet,
+                           COUNT(*)::BIGINT AS cnt,
+                           MAX(COALESCE(block_time, 0))::BIGINT AS last_seen
+                    FROM transfer_events
+                    WHERE to_wallet = $1
+                      AND from_wallet IS NOT NULL
+                      AND (block_time IS NULL OR block_time >= $3)
+                    GROUP BY from_wallet
+                 ),
+                 b AS (
+                    SELECT from_wallet,
+                           COUNT(*)::BIGINT AS cnt,
+                           MAX(COALESCE(block_time, 0))::BIGINT AS last_seen
+                    FROM transfer_events
+                    WHERE to_wallet = $2
+                      AND from_wallet IS NOT NULL
+                      AND (block_time IS NULL OR block_time >= $3)
+                    GROUP BY from_wallet
+                 )
+                 SELECT a.from_wallet,
+                        (a.cnt + b.cnt)::BIGINT AS total_cnt,
+                        GREATEST(a.last_seen, b.last_seen)::BIGINT AS last_seen
+                 FROM a
+                 INNER JOIN b ON a.from_wallet = b.from_wallet
+                 ORDER BY total_cnt DESC
+                 LIMIT $4",
+                &[&wallet_a, &wallet_b, &since_epoch, &limit],
+            )
+            .await
+            .map_err(|e| {
+                BeastError::DatabaseError(format!("Failed to get shared inbound senders: {}", e))
+            })?;
+
+        Ok(rows
+            .iter()
+            .map(|row| SharedWalletSignal {
+                wallet: row.get::<_, String>(0),
+                count: row.get::<_, i64>(1) as u64,
+                last_seen_epoch: row.get::<_, i64>(2) as u64,
+            })
+            .collect())
+    }
+
+    /// Get top counterparties for a wallet from transfer_events
+    pub async fn get_top_counterparties(
+        &self,
+        wallet: &str,
+        since_epoch: Option<u64>,
+        limit: usize,
+    ) -> BeastResult<Vec<SharedWalletSignal>> {
+        let since_epoch = since_epoch.unwrap_or(0) as i64;
+        let limit = (limit as i64).clamp(1, 200);
+
+        let rows = self
+            .client
+            .query(
+                "SELECT
+                    CASE WHEN from_wallet = $1 THEN to_wallet ELSE from_wallet END AS counterparty,
+                    COUNT(*)::BIGINT AS cnt,
+                    MAX(COALESCE(block_time, 0))::BIGINT AS last_seen
+                 FROM transfer_events
+                 WHERE (from_wallet = $1 OR to_wallet = $1)
+                   AND from_wallet IS NOT NULL
+                   AND to_wallet IS NOT NULL
+                   AND (block_time IS NULL OR block_time >= $2)
+                 GROUP BY counterparty
+                 ORDER BY cnt DESC
+                 LIMIT $3",
+                &[&wallet, &since_epoch, &limit],
+            )
+            .await
+            .map_err(|e| {
+                BeastError::DatabaseError(format!("Failed to get top counterparties: {}", e))
+            })?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let counterparty: Option<String> = row.get(0);
+                counterparty.map(|wallet| SharedWalletSignal {
+                    wallet,
+                    count: row.get::<_, i64>(1) as u64,
+                    last_seen_epoch: row.get::<_, i64>(2) as u64,
+                })
+            })
+            .collect())
+    }
+
     /// Get wallet connections
     pub async fn get_wallet_connections(
         &self,
@@ -416,5 +681,12 @@ pub struct WalletConnection {
     pub total_token_transferred: u64,
     pub transaction_count: u32,
     pub first_seen_epoch: u64,
+    pub last_seen_epoch: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SharedWalletSignal {
+    pub wallet: String,
+    pub count: u64,
     pub last_seen_epoch: u64,
 }

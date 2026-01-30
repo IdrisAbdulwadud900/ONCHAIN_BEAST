@@ -230,7 +230,7 @@ async fn get_wallet_cluster(bot: &Bot, chat_id: ChatId, wallet: &str) -> Respons
 
     // bootstrap=true so first-time users get data without manual ingestion.
     let url = format!(
-        "{}/api/v1/wallet/{}/cluster?bootstrap=true&bootstrap_limit=25&depth=2&threshold=0.10&limit=20",
+        "{}/api/v1/wallet/{}/cluster?bootstrap=true&bootstrap_limit=25&depth=2&threshold=0.10&limit=20&lookback_days=30",
         api_base(),
         wallet
     );
@@ -278,7 +278,7 @@ async fn get_side_wallets(bot: &Bot, chat_id: ChatId, wallet: &str) -> ResponseR
     let client = Client::new();
     // bootstrap=true so first-time users get data without manual ingestion.
     let url = format!(
-        "{}/api/v1/wallet/{}/side-wallets?bootstrap=true&bootstrap_limit=25&depth=2&threshold=0.10&limit=12",
+        "{}/api/v1/wallet/{}/side-wallets?bootstrap=true&bootstrap_limit=25&depth=2&threshold=0.10&limit=12&lookback_days=30",
         api_base(),
         wallet
     );
@@ -734,12 +734,16 @@ fn format_side_wallets(wallet: &str, data: &serde_json::Value) -> String {
         .get("confidence_threshold")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
+    let lookback_days = data
+        .get("lookback_days")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30);
 
     let mut text = format!(
         "🕵️ <b>Side-Wallet Candidates</b>\n━━━━━━━━━━━━━━━━\n\n\
 <b>Primary:</b>\n<code>{}</code>\n\n\
-Depth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
-        wallet, depth, threshold, ingested
+Depth: {} | Threshold: {:.2} | Lookback: {}d\nBootstrap ingested: {} tx\n\n",
+        wallet, depth, threshold, lookback_days, ingested
     );
 
     let Some(arr) = data.get("side_wallets").and_then(|v| v.as_array()) else {
@@ -765,6 +769,14 @@ Depth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
             .get("direction")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
+        let shared_funders = item
+            .get("shared_funders")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let shared_counterparties = item
+            .get("shared_counterparties")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let last_seen = item
             .get("last_seen_epoch")
             .and_then(|v| v.as_u64())
@@ -784,7 +796,7 @@ Depth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
         };
 
         text.push_str(&format!(
-            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {} | Dir: {}{}\n",
+            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {} | Dir: {}{}{}\n",
             i + 1,
             addr,
             score,
@@ -792,6 +804,11 @@ Depth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
             dir,
             if last_seen > 0 {
                 format!(" | Last seen: {}d", last_seen_days)
+            } else {
+                "".to_string()
+            },
+            if shared_funders > 0 || shared_counterparties > 0 {
+                format!(" | Funders: {} | Shared CP: {}", shared_funders, shared_counterparties)
             } else {
                 "".to_string()
             }
@@ -827,12 +844,16 @@ fn format_wallet_cluster(wallet: &str, data: &serde_json::Value) -> String {
         .get("connection_strength")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
+    let lookback_days = data
+        .get("lookback_days")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30);
 
     let mut text = format!(
         "🕸️ <b>Wallet Cluster</b>\n━━━━━━━━━━━━━━━━\n\n\
 <b>Primary:</b>\n<code>{}</code>\n\n\
-Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
-        wallet, size, strength, depth, threshold, ingested
+Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2} | Lookback: {}d\nBootstrap ingested: {} tx\n\n",
+        wallet, size, strength, depth, threshold, lookback_days, ingested
     );
 
     let Some(arr) = data.get("wallets").and_then(|v| v.as_array()) else {
@@ -863,6 +884,14 @@ Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2}\nBootstrap 
             .get("direction")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
+        let shared_funders = item
+            .get("shared_funders")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let shared_counterparties = item
+            .get("shared_counterparties")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let last_seen = item
             .get("last_seen_epoch")
             .and_then(|v| v.as_u64())
@@ -882,7 +911,7 @@ Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2}\nBootstrap 
         };
 
         text.push_str(&format!(
-            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {} | Dir: {}{}\n",
+            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {} | Dir: {}{}{}\n",
             i + 1,
             addr,
             score,
@@ -890,6 +919,11 @@ Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2}\nBootstrap 
             dir,
             if last_seen > 0 {
                 format!(" | Last seen: {}d", last_seen_days)
+            } else {
+                "".to_string()
+            },
+            if shared_funders > 0 || shared_counterparties > 0 {
+                format!(" | Funders: {} | Shared CP: {}", shared_funders, shared_counterparties)
             } else {
                 "".to_string()
             }

@@ -49,13 +49,15 @@ impl TransferAnalytics {
         self.db_manager.store_transaction(tx).await?;
 
         // Process SOL transfers
-        for transfer in &tx.sol_transfers {
-            self.store_sol_transfer(tx, transfer).await?;
+        for (i, transfer) in tx.sol_transfers.iter().enumerate() {
+            self.store_sol_transfer(tx, transfer, i as i32).await?;
         }
 
         // Process token transfers
-        for transfer in &tx.token_transfers {
-            self.store_token_transfer(tx, transfer).await?;
+        let token_offset = tx.sol_transfers.len() as i32;
+        for (j, transfer) in tx.token_transfers.iter().enumerate() {
+            self.store_token_transfer(tx, transfer, token_offset + j as i32)
+                .await?;
         }
 
         Ok(())
@@ -66,7 +68,13 @@ impl TransferAnalytics {
         &self,
         _tx: &EnhancedTransaction,
         transfer: &SolTransfer,
+        event_index: i32,
     ) -> BeastResult<()> {
+        // Store event-level transfer
+        self.db_manager
+            .store_sol_transfer_event(_tx, transfer, event_index)
+            .await?;
+
         // Update wallet relationship in database
         self.db_manager
             .store_wallet_relationship(
@@ -95,7 +103,13 @@ impl TransferAnalytics {
         &self,
         _tx: &EnhancedTransaction,
         transfer: &TokenTransfer,
+        event_index: i32,
     ) -> BeastResult<()> {
+        // Store event-level transfer (even when owners are not resolved)
+        self.db_manager
+            .store_token_transfer_event(_tx, transfer, event_index)
+            .await?;
+
         // Update wallet relationship in database
         if let (Some(from), Some(to)) = (&transfer.from_owner, &transfer.to_owner) {
             self.db_manager
