@@ -9,6 +9,13 @@ fn api_base() -> String {
     std::env::var("ONCHAIN_BEAST_API_BASE").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
 
+fn api_key() -> Option<String> {
+    std::env::var("ONCHAIN_BEAST_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init();
@@ -47,7 +54,8 @@ async fn handle_message(bot: Bot, msg: Message) -> ResponseResult<()> {
                     <b>Commands:</b>\n\
                     /analyze &lt;wallet&gt; - Analyze wallet\n\
                     /stats &lt;wallet&gt; - Quick stats\n\
-                    /cluster &lt;wallet&gt; - Side-wallet cluster\n\
+                    /sidewallets &lt;wallet&gt; - Find side-wallet candidates\n\
+                    /cluster &lt;wallet&gt; - Cluster summary (includes primary)\n\
                     /risk &lt;wallet&gt; - Risk score\n\
                     /patterns &lt;wallet&gt; - Pattern report\n\
                     /highrisk - High-risk wallets\n\
@@ -87,6 +95,15 @@ async fn handle_message(bot: Bot, msg: Message) -> ResponseResult<()> {
                     return Ok(());
                 }
                 get_wallet_cluster(&bot, msg.chat.id, arg).await?;
+                return Ok(());
+            }
+            "/sidewallets" => {
+                if arg.is_empty() {
+                    bot.send_message(msg.chat.id, "❌ Usage: /sidewallets <wallet_address>")
+                        .await?;
+                    return Ok(());
+                }
+                get_side_wallets(&bot, msg.chat.id, arg).await?;
                 return Ok(());
             }
             "/risk" => {
@@ -210,6 +227,55 @@ async fn get_wallet_cluster(bot: &Bot, chat_id: ChatId, wallet: &str) -> Respons
         .await?;
 
     let client = Client::new();
+
+    // bootstrap=true so first-time users get data without manual ingestion.
+    let url = format!(
+        "{}/api/v1/wallet/{}/cluster?bootstrap=true&bootstrap_limit=25&depth=2&threshold=0.10&limit=20",
+        api_base(),
+        wallet
+    );
+
+    let mut req = client.get(&url);
+    if let Some(key) = api_key() {
+        req = req.header("X-API-Key", key);
+    }
+
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.as_u16() == 401 {
+                bot.send_message(
+                    chat_id,
+                    "🔒 This endpoint is protected. Set ONCHAIN_BEAST_API_KEY (and enable_auth on the API) or disable auth for local use.",
+                )
+                .await?;
+                return Ok(());
+            }
+            match resp.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    let text = format_wallet_cluster(wallet, &data);
+                    bot.send_message(chat_id, text)
+                        .parse_mode(teloxide::types::ParseMode::Html)
+                        .await?;
+                }
+                Err(_) => {
+                    bot.send_message(chat_id, "❌ Cluster unavailable").await?;
+                }
+            }
+        }
+        Err(_) => {
+            bot.send_message(chat_id, "❌ Service error").await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn get_side_wallets(bot: &Bot, chat_id: ChatId, wallet: &str) -> ResponseResult<()> {
+    bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing)
+        .await?;
+
+    let client = Client::new();
     // bootstrap=true so first-time users get data without manual ingestion.
     let url = format!(
         "{}/api/v1/wallet/{}/side-wallets?bootstrap=true&bootstrap_limit=25&depth=2&threshold=0.10&limit=12",
@@ -217,18 +283,34 @@ async fn get_wallet_cluster(bot: &Bot, chat_id: ChatId, wallet: &str) -> Respons
         wallet
     );
 
-    match client.get(&url).send().await {
-        Ok(resp) => match resp.json::<serde_json::Value>().await {
-            Ok(data) => {
-                let text = format_side_wallets(wallet, &data);
-                bot.send_message(chat_id, text)
-                    .parse_mode(teloxide::types::ParseMode::Html)
-                    .await?;
+    let mut req = client.get(&url);
+    if let Some(key) = api_key() {
+        req = req.header("X-API-Key", key);
+    }
+
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.as_u16() == 401 {
+                bot.send_message(
+                    chat_id,
+                    "🔒 This endpoint is protected. Set ONCHAIN_BEAST_API_KEY (and enable_auth on the API) or disable auth for local use.",
+                )
+                .await?;
+                return Ok(());
             }
-            Err(_) => {
-                bot.send_message(chat_id, "❌ Cluster unavailable").await?;
+            match resp.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    let text = format_side_wallets(wallet, &data);
+                    bot.send_message(chat_id, text)
+                        .parse_mode(teloxide::types::ParseMode::Html)
+                        .await?;
+                }
+                Err(_) => {
+                    bot.send_message(chat_id, "❌ Side-wallets unavailable").await?;
+                }
             }
-        },
+        }
         Err(_) => {
             bot.send_message(chat_id, "❌ Service error").await?;
         }
@@ -654,7 +736,7 @@ fn format_side_wallets(wallet: &str, data: &serde_json::Value) -> String {
         .unwrap_or(0.0);
 
     let mut text = format!(
-        "🕸️ <b>Side-Wallet Cluster</b>\n━━━━━━━━━━━━━━━━\n\n\
+        "🕵️ <b>Side-Wallet Candidates</b>\n━━━━━━━━━━━━━━━━\n\n\
 <b>Primary:</b>\n<code>{}</code>\n\n\
 Depth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
         wallet, depth, threshold, ingested
@@ -679,13 +761,138 @@ Depth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
             .unwrap_or("Unknown");
         let score = item.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let d = item.get("depth").and_then(|v| v.as_u64()).unwrap_or(0);
+        let dir = item
+            .get("direction")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        let last_seen = item
+            .get("last_seen_epoch")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let last_seen_days = if last_seen > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if now > last_seen {
+                ((now - last_seen) as f64 / 86_400.0).round() as u64
+            } else {
+                0
+            }
+        } else {
+            0
+        };
 
         text.push_str(&format!(
-            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {}\n",
+            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {} | Dir: {}{}\n",
             i + 1,
             addr,
             score,
-            d
+            d,
+            dir,
+            if last_seen > 0 {
+                format!(" | Last seen: {}d", last_seen_days)
+            } else {
+                "".to_string()
+            }
+        ));
+
+        if let Some(reasons) = item.get("reasons").and_then(|v| v.as_array()) {
+            if let Some(r0) = reasons.get(0).and_then(|v| v.as_str()) {
+                text.push_str(&format!("   Evidence: {}\n", r0));
+            }
+        }
+
+        text.push('\n');
+    }
+
+    text
+}
+
+fn format_wallet_cluster(wallet: &str, data: &serde_json::Value) -> String {
+    let ingested = data
+        .get("bootstrap_ingested_transactions")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let depth = data
+        .get("analysis_depth")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let threshold = data
+        .get("confidence_threshold")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let size = data.get("cluster_size").and_then(|v| v.as_u64()).unwrap_or(1);
+    let strength = data
+        .get("connection_strength")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let mut text = format!(
+        "🕸️ <b>Wallet Cluster</b>\n━━━━━━━━━━━━━━━━\n\n\
+<b>Primary:</b>\n<code>{}</code>\n\n\
+Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
+        wallet, size, strength, depth, threshold, ingested
+    );
+
+    let Some(arr) = data.get("wallets").and_then(|v| v.as_array()) else {
+        text.push_str("No results yet.");
+        return text;
+    };
+
+    if arr.len() <= 1 {
+        text.push_str("No cluster expansion yet. Try again in a minute (or increase bootstrap_limit on the API call).\n");
+        return text;
+    }
+
+    for (i, item) in arr
+        .iter()
+        .filter(|w| {
+        w.get("address").and_then(|v| v.as_str()) != Some(wallet)
+    })
+        .take(10)
+        .enumerate()
+    {
+        let addr = item
+            .get("address")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+        let score = item.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let d = item.get("depth").and_then(|v| v.as_u64()).unwrap_or(0);
+        let dir = item
+            .get("direction")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        let last_seen = item
+            .get("last_seen_epoch")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let last_seen_days = if last_seen > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if now > last_seen {
+                ((now - last_seen) as f64 / 86_400.0).round() as u64
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        text.push_str(&format!(
+            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {} | Dir: {}{}\n",
+            i + 1,
+            addr,
+            score,
+            d,
+            dir,
+            if last_seen > 0 {
+                format!(" | Last seen: {}d", last_seen_days)
+            } else {
+                "".to_string()
+            }
         ));
 
         if let Some(reasons) = item.get("reasons").and_then(|v| v.as_array()) {

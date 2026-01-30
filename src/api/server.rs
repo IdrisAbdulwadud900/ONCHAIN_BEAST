@@ -236,6 +236,9 @@ pub mod handlers {
         tx_count: u32,
         total_sol: f64,
         total_token: u64,
+        first_seen_epoch: u64,
+        last_seen_epoch: u64,
+        direction: String,
     }
 
     fn clamp01(x: f64) -> f64 {
@@ -253,6 +256,32 @@ pub mod handlers {
         let token = ((total_token as f64) / 1_000_000.0 + 1.0).ln();
         let raw = tx * 0.65 + sol * 0.30 + token * 0.05;
         clamp01(1.0 - (-raw / 3.0).exp())
+    }
+
+    fn recency_score(last_seen_epoch: u64) -> f64 {
+        // Favor recent relationships (age decay ~30 days).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if last_seen_epoch == 0 || last_seen_epoch > now {
+            return 0.5;
+        }
+
+        let age_days = (now - last_seen_epoch) as f64 / 86_400.0;
+        let decay = (-age_days / 30.0).exp();
+        clamp01(0.15 + 0.85 * decay)
+    }
+
+    fn direction_label(current: &str, conn_from: &str, conn_to: &str) -> String {
+        if current == conn_from {
+            "outbound".to_string()
+        } else if current == conn_to {
+            "inbound".to_string()
+        } else {
+            "unknown".to_string()
+        }
     }
 
     fn build_reason(
@@ -314,15 +343,29 @@ pub mod handlers {
                     continue;
                 }
 
-                let s = edge_score(
+                let mut s = edge_score(
                     conn.transaction_count,
                     conn.total_sol_transferred,
                     conn.total_token_transferred,
                 );
+
+                // Penalize very weak, single-touch relationships.
+                if conn.transaction_count <= 1
+                    && conn.total_sol_transferred.abs() < 0.01
+                    && conn.total_token_transferred == 0
+                {
+                    s *= 0.35;
+                }
+
+                // Favor recent relationships.
+                s *= recency_score(conn.last_seen_epoch);
+
                 let combined = clamp01(parent_score * s * (0.85_f64).powi((depth as i32) + 1));
                 if combined < threshold {
                     continue;
                 }
+
+                let dir = direction_label(&current, from, to);
 
                 let reason = build_reason(
                     from,
@@ -342,6 +385,9 @@ pub mod handlers {
                         tx_count: conn.transaction_count,
                         total_sol: conn.total_sol_transferred,
                         total_token: conn.total_token_transferred,
+                        first_seen_epoch: conn.first_seen_epoch,
+                        last_seen_epoch: conn.last_seen_epoch,
+                        direction: dir.clone(),
                     });
 
                 // Keep best score, but also accumulate evidence.
@@ -351,9 +397,18 @@ pub mod handlers {
                     entry.tx_count = conn.transaction_count;
                     entry.total_sol = conn.total_sol_transferred;
                     entry.total_token = conn.total_token_transferred;
+                    entry.first_seen_epoch = conn.first_seen_epoch;
+                    entry.last_seen_epoch = conn.last_seen_epoch;
+                    entry.direction = dir.clone();
                 }
                 if entry.reasons.len() < 5 {
-                    entry.reasons.push(reason);
+                    if conn.last_seen_epoch > 0 {
+                        entry
+                            .reasons
+                            .push(format!("{} ({}; last_seen={})", reason, dir, conn.last_seen_epoch));
+                    } else {
+                        entry.reasons.push(format!("{} ({})", reason, dir));
+                    }
                 }
 
                 if !visited.contains(other) {
@@ -670,6 +725,9 @@ pub mod handlers {
                         "tx_count": c.tx_count,
                         "total_sol": c.total_sol,
                         "total_token": c.total_token,
+                        "first_seen_epoch": c.first_seen_epoch,
+                        "last_seen_epoch": c.last_seen_epoch,
+                        "direction": c.direction,
                         "reasons": c.reasons,
                     })).collect::<Vec<_>>(),
                     "confidence_threshold": threshold,
@@ -782,6 +840,9 @@ pub mod handlers {
                         "tx_count": c.tx_count,
                         "total_sol": c.total_sol,
                         "total_token": c.total_token,
+                        "first_seen_epoch": c.first_seen_epoch,
+                        "last_seen_epoch": c.last_seen_epoch,
+                        "direction": c.direction,
                         "reasons": c.reasons,
                     }));
                 }

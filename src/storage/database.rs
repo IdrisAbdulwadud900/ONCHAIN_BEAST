@@ -326,8 +326,15 @@ impl DatabaseManager {
         let rows = self
             .client
             .query(
-                "SELECT from_wallet, to_wallet, sol_amount, token_amount, transaction_count
-                 FROM wallet_relationships 
+                "SELECT
+                    from_wallet,
+                    to_wallet,
+                    sol_amount,
+                    token_amount,
+                    transaction_count,
+                    EXTRACT(EPOCH FROM first_seen)::BIGINT AS first_seen_epoch,
+                    EXTRACT(EPOCH FROM last_seen)::BIGINT AS last_seen_epoch
+                 FROM wallet_relationships
                  WHERE from_wallet = $1 OR to_wallet = $1
                  ORDER BY transaction_count DESC
                  LIMIT 100",
@@ -344,6 +351,8 @@ impl DatabaseManager {
                 total_sol_transferred: row.get(2),
                 total_token_transferred: row.get::<_, i64>(3) as u64,
                 transaction_count: row.get::<_, i32>(4) as u32,
+                first_seen_epoch: row.get::<_, i64>(5) as u64,
+                last_seen_epoch: row.get::<_, i64>(6) as u64,
             })
             .collect();
 
@@ -406,4 +415,6 @@ pub struct WalletConnection {
     pub total_sol_transferred: f64,
     pub total_token_transferred: u64,
     pub transaction_count: u32,
+    pub first_seen_epoch: u64,
+    pub last_seen_epoch: u64,
 }
