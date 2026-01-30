@@ -20,6 +20,13 @@ use std::sync::Arc;
 
 use super::auth::ApiKey;
 
+fn is_rate_limit_exempt_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/" | "/health" | "/status" | "/metrics" | "/metrics/health"
+    )
+}
+
 /// Rate limiter configuration
 #[derive(Clone)]
 pub struct RateLimiterConfig {
@@ -71,8 +78,9 @@ impl RateLimiter {
         self.ip_limiters
             .entry(ip)
             .or_insert_with(|| {
-                let quota =
-                    Quota::per_minute(NonZeroU32::new(self.config.requests_per_minute).unwrap());
+                let per_minute = NonZeroU32::new(self.config.requests_per_minute.max(1)).unwrap();
+                let burst = NonZeroU32::new(self.config.burst_size.max(1)).unwrap();
+                let quota = Quota::per_minute(per_minute).allow_burst(burst);
                 Arc::new(GovernorRateLimiter::direct(quota))
             })
             .clone()
@@ -87,9 +95,10 @@ impl RateLimiter {
             .entry(api_key.to_string())
             .or_insert_with(|| {
                 // API keys get higher rate limits
-                let quota = Quota::per_minute(
-                    NonZeroU32::new(self.config.requests_per_minute * 5).unwrap(),
-                );
+                let per_minute =
+                    NonZeroU32::new((self.config.requests_per_minute * 5).max(1)).unwrap();
+                let burst = NonZeroU32::new(self.config.burst_size.max(1)).unwrap();
+                let quota = Quota::per_minute(per_minute).allow_burst(burst);
                 Arc::new(GovernorRateLimiter::direct(quota))
             })
             .clone()
@@ -146,6 +155,14 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
+        if is_rate_limit_exempt_path(req.path()) {
+            let fut = self.service.call(req);
+            return Box::pin(async move {
+                let res = fut.await?;
+                Ok(res.map_into_boxed_body())
+            });
+        }
+
         // Check if API key is present (higher rate limit)
         let api_key = req.extensions().get::<ApiKey>().map(|k| k.0.clone());
 
@@ -155,9 +172,10 @@ where
                 .api_key_limiters
                 .entry(key)
                 .or_insert_with(|| {
-                    let quota = Quota::per_minute(
-                        NonZeroU32::new(self.config.requests_per_minute * 5).unwrap(),
-                    );
+                    let per_minute =
+                        NonZeroU32::new((self.config.requests_per_minute * 5).max(1)).unwrap();
+                    let burst = NonZeroU32::new(self.config.burst_size.max(1)).unwrap();
+                    let quota = Quota::per_minute(per_minute).allow_burst(burst);
                     Arc::new(GovernorRateLimiter::direct(quota))
                 })
                 .clone();
@@ -191,9 +209,10 @@ where
                     .ip_limiters
                     .entry(ip)
                     .or_insert_with(|| {
-                        let quota = Quota::per_minute(
-                            NonZeroU32::new(self.config.requests_per_minute).unwrap(),
-                        );
+                        let per_minute =
+                            NonZeroU32::new(self.config.requests_per_minute.max(1)).unwrap();
+                        let burst = NonZeroU32::new(self.config.burst_size.max(1)).unwrap();
+                        let quota = Quota::per_minute(per_minute).allow_burst(burst);
                         Arc::new(GovernorRateLimiter::direct(quota))
                     })
                     .clone();

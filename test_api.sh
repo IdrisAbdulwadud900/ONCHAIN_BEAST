@@ -32,13 +32,16 @@ test_api() {
             -d "$data")
     fi
     
-    if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 500 ]; then
+    if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 500 ] && [ "$http_code" -ne 429 ]; then
         echo "  ✅ PASS (HTTP $http_code)"
         PASSED=$((PASSED + 1))
     else
         echo "  ❌ FAIL (HTTP $http_code)"
         FAILED=$((FAILED + 1))
     fi
+
+    # Avoid triggering rate limiting during local smoke tests.
+    sleep 1
 }
 
 echo "=== Health & Status (3 endpoints) ==="
