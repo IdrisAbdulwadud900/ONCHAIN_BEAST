@@ -21,6 +21,9 @@ mkdir -p backups
 # Create .env file for personal use
 echo "⚙️  Creating configuration files..."
 
+if [ -f .env ]; then
+    echo "ℹ️  .env already exists; not overwriting."
+else
 cat > .env << 'EOF'
 # OnChain Beast - Personal Configuration
 # For personal use only
@@ -59,8 +62,13 @@ ENABLE_CACHING=true
 ENABLE_PERSISTENCE=true
 EOF
 
+fi
+
 chmod 600 .env
 
+if [ -f config/database.sql ]; then
+    echo "ℹ️  config/database.sql already exists; not overwriting."
+else
 cat > config/database.sql << 'EOF'
 -- OnChain Beast Database Setup
 -- Run this script to initialize PostgreSQL database
@@ -146,10 +154,15 @@ LIMIT 100;
 GRANT SELECT ON v_high_risk_wallets TO PUBLIC;
 EOF
 
+fi
+
 echo "✅ Configuration files created"
 echo ""
 
 # Create startup script
+if [ -f start.sh ]; then
+    echo "ℹ️  start.sh already exists; not overwriting."
+else
 cat > start.sh << 'EOF'
 #!/bin/bash
 # Start OnChain Beast application
@@ -206,9 +219,14 @@ echo ""
 exec ./target/release/onchain_beast
 EOF
 
+fi
+
 chmod +x start.sh
 
 # Create systemd service file (optional, for production use)
+if [ -f onchain_beast.service ]; then
+    echo "ℹ️  onchain_beast.service already exists; not overwriting."
+else
 cat > onchain_beast.service << 'EOF'
 [Unit]
 Description=OnChain Beast - Solana Transaction Analyzer
@@ -230,10 +248,15 @@ EnvironmentFile=/opt/onchain_beast/.env
 WantedBy=multi-user.target
 EOF
 
+fi
+
 echo "✅ Service file created (optional)"
 echo ""
 
 # Create monitoring script
+if [ -f monitor.sh ]; then
+    echo "ℹ️  monitor.sh already exists; not overwriting."
+else
 cat > monitor.sh << 'EOF'
 #!/bin/bash
 # Monitor OnChain Beast application
@@ -299,6 +322,8 @@ echo ""
 echo "Logs:"
 tail -5 logs/onchain_beast.log 2>/dev/null || echo "No logs available yet"
 EOF
+
+fi
 
 chmod +x monitor.sh
 
