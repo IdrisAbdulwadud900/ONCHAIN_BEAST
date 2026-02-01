@@ -18,7 +18,7 @@ use crate::modules::{
     AnalysisService, PatternDetector, TokenMetadataServiceEnhanced, TransactionGraphBuilder,
     TransactionHandler, TransferAnalytics,
 };
-use crate::storage::{DatabaseManager, RedisCache};
+use crate::storage::{BehavioralProfile, DatabaseManager, RedisCache};
 
 /// API server state
 pub struct ApiState {
@@ -245,6 +245,7 @@ pub mod handlers {
         shared_counterparties_count: u32,
         shared_funders: Vec<String>,
         shared_counterparties: Vec<String>,
+        behavioral_similarity: f64,
     }
 
     fn clamp01(x: f64) -> f64 {
@@ -305,6 +306,55 @@ pub mod handlers {
         } else {
             format!("{} ({} events)", wallet, count)
         }
+    }
+
+    fn compute_behavioral_similarity(
+        profile_a: &BehavioralProfile,
+        profile_b: &BehavioralProfile,
+    ) -> f64 {
+        // Similarity based on transaction patterns (0.0 - 1.0)
+        
+        // 1. Average SOL amount similarity (normalize by log scale)
+        let avg_sol_sim = if profile_a.avg_sol_per_tx > 0.0 && profile_b.avg_sol_per_tx > 0.0 {
+            let ratio = (profile_a.avg_sol_per_tx / profile_b.avg_sol_per_tx).max(profile_b.avg_sol_per_tx / profile_a.avg_sol_per_tx);
+            let log_ratio = ratio.ln().abs();
+            (-log_ratio / 2.0).exp() // Decay factor for differences
+        } else {
+            0.5
+        };
+
+        // 2. Transaction frequency similarity (tx per day)
+        let freq_sim = if profile_a.avg_tx_per_day > 0.0 && profile_b.avg_tx_per_day > 0.0 {
+            let ratio = (profile_a.avg_tx_per_day / profile_b.avg_tx_per_day).max(profile_b.avg_tx_per_day / profile_a.avg_tx_per_day);
+            let log_ratio = ratio.ln().abs();
+            (-log_ratio / 1.5).exp()
+        } else {
+            0.5
+        };
+
+        // 3. Most active hour similarity (time-of-day clustering)
+        let hour_sim = match (profile_a.most_active_hour_utc, profile_b.most_active_hour_utc) {
+            (Some(h_a), Some(h_b)) => {
+                let diff = (h_a as i32 - h_b as i32).abs();
+                // Hours are circular (0-23), so check both directions
+                let circular_diff = diff.min(24 - diff);
+                // Strong signal if within 2 hours, moderate if within 4 hours
+                if circular_diff <= 2 {
+                    1.0
+                } else if circular_diff <= 4 {
+                    0.7
+                } else if circular_diff <= 8 {
+                    0.4
+                } else {
+                    0.1
+                }
+            }
+            _ => 0.3, // Unknown or one has no dominant hour
+        };
+
+        // Weighted combination
+        let combined = (avg_sol_sim * 0.40) + (freq_sim * 0.35) + (hour_sim * 0.25);
+        clamp01(combined)
     }
 
     async fn enrich_candidates_with_event_signals(
@@ -396,6 +446,47 @@ pub mod handlers {
             let bump = 0.06 * (c.shared_funders_count.min(3) as f64)
                 + 0.03 * (c.shared_counterparties_count.min(5) as f64);
             c.score = clamp01(c.score + bump);
+        }
+
+        // Behavioral correlation: compare transaction patterns
+        let main_profile = state
+            .db_manager
+            .get_behavioral_profile(main_wallet, Some(since_epoch))
+            .await
+            .ok()
+            .flatten();
+
+        if let Some(main_prof) = main_profile {
+            for c in candidates.iter_mut() {
+                match state
+                    .db_manager
+                    .get_behavioral_profile(&c.address, Some(since_epoch))
+                    .await
+                {
+                    Ok(Some(cand_prof)) => {
+                        let similarity = compute_behavioral_similarity(&main_prof, &cand_prof);
+                        c.behavioral_similarity = similarity;
+
+                        if similarity > 0.65 {
+                            if c.reasons.len() < 8 {
+                                c.reasons.push(format!(
+                                    "Behavioral pattern match (similarity: {:.2})",
+                                    similarity
+                                ));
+                            }
+                            // Behavioral boost (15% weight as planned)
+                            c.score = clamp01(c.score + similarity * 0.12);
+                        }
+                    }
+                    Ok(None) => {
+                        c.behavioral_similarity = 0.0;
+                    }
+                    Err(e) => {
+                        tracing::debug!("behavioral profile query failed for {}: {}", c.address, e);
+                        c.behavioral_similarity = 0.0;
+                    }
+                }
+            }
         }
     }
 
@@ -508,6 +599,7 @@ pub mod handlers {
                         shared_counterparties_count: 0,
                         shared_funders: Vec::new(),
                         shared_counterparties: Vec::new(),
+                        behavioral_similarity: 0.0,
                     });
 
                 // Keep best score, but also accumulate evidence.
@@ -863,6 +955,7 @@ pub mod handlers {
                         "shared_counterparties_count": c.shared_counterparties_count,
                         "shared_funders": c.shared_funders,
                         "shared_counterparties": c.shared_counterparties,
+                        "behavioral_similarity": c.behavioral_similarity,
                         "reasons": c.reasons,
                     })).collect::<Vec<_>>(),
                     "confidence_threshold": threshold,
@@ -984,6 +1077,7 @@ pub mod handlers {
                         "shared_counterparties_count": c.shared_counterparties_count,
                         "shared_funders": c.shared_funders,
                         "shared_counterparties": c.shared_counterparties,
+                        "behavioral_similarity": c.behavioral_similarity,
                         "reasons": c.reasons,
                     }));
                 }

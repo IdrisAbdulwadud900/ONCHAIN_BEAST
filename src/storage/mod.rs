@@ -2,5 +2,5 @@
 pub mod database;
 pub mod redis_cache;
 
-pub use database::{DatabaseManager, DatabaseStats};
+pub use database::{BehavioralProfile, DatabaseManager, DatabaseStats, SharedWalletSignal, WalletConnection};
 pub use redis_cache::{keys, RedisCache, RedisInfo};

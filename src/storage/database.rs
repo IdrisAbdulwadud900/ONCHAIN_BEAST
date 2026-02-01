@@ -656,6 +656,99 @@ impl DatabaseManager {
         })
     }
 
+    /// Get behavioral profile for a wallet from transfer_events
+    pub async fn get_behavioral_profile(
+        &self,
+        wallet: &str,
+        since_epoch: Option<u64>,
+    ) -> BeastResult<Option<BehavioralProfile>> {
+        let since = since_epoch.unwrap_or(0) as i64;
+
+        let row = self
+            .client
+            .query_opt(
+                "WITH wallet_transfers AS (
+                    SELECT
+                        COALESCE(amount_sol, 0.0) AS sol,
+                        block_time,
+                        EXTRACT(HOUR FROM TO_TIMESTAMP(block_time)) AS hour_utc
+                    FROM transfer_events
+                    WHERE (from_wallet = $1 OR to_wallet = $1)
+                      AND kind = 'sol'
+                      AND amount_sol > 0.0
+                      AND (block_time IS NULL OR block_time >= $2)
+                ),
+                time_bounds AS (
+                    SELECT
+                        MIN(block_time)::BIGINT AS first_tx,
+                        MAX(block_time)::BIGINT AS last_tx
+                    FROM wallet_transfers
+                ),
+                stats AS (
+                    SELECT
+                        COUNT(*)::BIGINT AS total_transfers,
+                        AVG(sol) AS avg_sol,
+                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY sol) AS median_sol,
+                        MODE() WITHIN GROUP (ORDER BY hour_utc::INTEGER) AS most_active_hour
+                    FROM wallet_transfers
+                )
+                SELECT
+                    s.total_transfers,
+                    COALESCE(s.avg_sol, 0.0) AS avg_sol,
+                    COALESCE(s.median_sol, 0.0) AS median_sol,
+                    COALESCE(s.most_active_hour, -1)::INTEGER AS most_active_hour,
+                    COALESCE(t.first_tx, 0)::BIGINT AS first_tx,
+                    COALESCE(t.last_tx, 0)::BIGINT AS last_tx
+                FROM stats s
+                CROSS JOIN time_bounds t
+                WHERE s.total_transfers > 0",
+                &[&wallet, &since],
+            )
+            .await
+            .map_err(|e| {
+                BeastError::DatabaseError(format!("Failed to get behavioral profile: {}", e))
+            })?;
+
+        if let Some(row) = row {
+            let total_transfers: i64 = row.get(0);
+            let avg_sol: f64 = row.get(1);
+            let median_sol: f64 = row.get(2);
+            let most_active_hour: i32 = row.get(3);
+            let first_tx: i64 = row.get(4);
+            let last_tx: i64 = row.get(5);
+
+            if total_transfers == 0 {
+                return Ok(None);
+            }
+
+            let days_active = if last_tx > first_tx && first_tx > 0 {
+                ((last_tx - first_tx) / 86_400).max(1) as u32
+            } else {
+                1
+            };
+
+            let avg_tx_per_day = total_transfers as f64 / days_active as f64;
+
+            Ok(Some(BehavioralProfile {
+                wallet: wallet.to_string(),
+                total_transfers: total_transfers as u64,
+                avg_sol_per_tx: avg_sol,
+                median_sol_per_tx: median_sol,
+                total_days_active: days_active,
+                avg_tx_per_day,
+                most_active_hour_utc: if most_active_hour >= 0 {
+                    Some(most_active_hour)
+                } else {
+                    None
+                },
+                first_tx_epoch: first_tx as u64,
+                last_tx_epoch: last_tx as u64,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Health check
     pub async fn health_check(&self) -> BeastResult<bool> {
         self.client
@@ -689,4 +782,17 @@ pub struct SharedWalletSignal {
     pub wallet: String,
     pub count: u64,
     pub last_seen_epoch: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BehavioralProfile {
+    pub wallet: String,
+    pub total_transfers: u64,
+    pub avg_sol_per_tx: f64,
+    pub median_sol_per_tx: f64,
+    pub total_days_active: u32,
+    pub avg_tx_per_day: f64,
+    pub most_active_hour_utc: Option<i32>,
+    pub first_tx_epoch: u64,
+    pub last_tx_epoch: u64,
 }
