@@ -31,6 +31,7 @@ pub struct ApiState {
     pub redis_cache: Arc<RedisCache>,
     pub token_metadata_service: Arc<TokenMetadataServiceEnhanced>,
     pub analysis_service: Arc<AnalysisService>,
+    pub transfer_analytics: Arc<TransferAnalytics>,
 }
 
 /// Start the REST API server
@@ -72,6 +73,12 @@ pub async fn start_server(
     ));
     info!("✅ Initialized analysis service with caching and metrics");
 
+    // Initialize transfer analytics
+    let transfer_analytics = Arc::new(TransferAnalytics::new(
+        Arc::clone(&db_manager),
+        Arc::clone(&redis_cache),
+    ));
+
     let state = web::Data::new(ApiState {
         rpc_client,
         database,
@@ -82,6 +89,7 @@ pub async fn start_server(
         redis_cache: Arc::clone(&redis_cache),
         token_metadata_service,
         analysis_service,
+        transfer_analytics,
     });
 
     info!("🌐 Starting REST API server on {}:{}", host, port);

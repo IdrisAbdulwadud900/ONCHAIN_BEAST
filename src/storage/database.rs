@@ -832,6 +832,28 @@ impl DatabaseManager {
             .map_err(|e| BeastError::DatabaseError(format!("Health check failed: {}", e)))?;
         Ok(true)
     }
+
+    /// Get active wallets from wallet_relationships table for backfill
+    pub async fn get_active_wallets(&self, limit: i64) -> BeastResult<Vec<String>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT DISTINCT wallet FROM (
+                    SELECT from_wallet AS wallet FROM wallet_relationships
+                    UNION
+                    SELECT to_wallet AS wallet FROM wallet_relationships
+                ) wallets
+                ORDER BY wallet
+                LIMIT $1",
+                &[&limit],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get active wallets: {}", e)))?;
+
+        let wallets = rows.iter().map(|row| row.get::<_, String>(0)).collect();
+
+        Ok(wallets)
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

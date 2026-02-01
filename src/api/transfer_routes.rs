@@ -1,6 +1,6 @@
 use crate::api::server::ApiState;
 use crate::metrics::{Timer, HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION};
-use crate::modules::TransferAnalytics;
+use crate::modules::{EventIngestionWorker, IngestionConfig, TransferAnalytics};
 /// Transfer Analytics API Endpoints
 /// Provides detailed transfer analysis and statistics
 use actix_web::{get, post, web, HttpResponse};
@@ -212,6 +212,218 @@ async fn get_top_transfers(wallet: web::Path<String>, state: web::Data<ApiState>
     }
 }
 
+/// POST /transfer/ingest/wallet
+/// Ingest transaction events for a specific wallet
+#[derive(Debug, Deserialize)]
+struct IngestWalletRequest {
+    wallet: String,
+    #[serde(default)]
+    batch_size: Option<usize>,
+    #[serde(default)]
+    max_age_days: Option<u64>,
+}
+
+#[post("/ingest/wallet")]
+async fn ingest_wallet_events(
+    req: web::Json<IngestWalletRequest>,
+    state: web::Data<ApiState>,
+) -> HttpResponse {
+    let timer = Timer::new();
+
+    let config = IngestionConfig {
+        batch_size: req.batch_size.unwrap_or(100),
+        max_age_days: req.max_age_days.unwrap_or(30),
+        ..Default::default()
+    };
+
+    let worker = EventIngestionWorker::new(
+        state.db_manager.clone(),
+        state.rpc_client.clone(),
+        state.transaction_handler.clone(),
+        state.transfer_analytics.clone(),
+        config,
+    );
+
+    match worker.ingest_wallet(&req.wallet).await {
+        Ok(stats) => {
+            HTTP_REQUESTS_TOTAL
+                .with_label_values(&["POST", "/transfer/ingest/wallet", "200"])
+                .inc();
+            HTTP_REQUEST_DURATION
+                .with_label_values(&["POST", "/transfer/ingest/wallet"])
+                .observe(timer.elapsed_secs());
+
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "wallet": req.wallet,
+                "stats": {
+                    "total_signatures": stats.total_signatures,
+                    "ingested_ok": stats.ingested_ok,
+                    "ingested_failed": stats.ingested_failed,
+                    "parse_failed": stats.parse_failed,
+                    "skipped_duplicate": stats.skipped_duplicate,
+                },
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }))
+        }
+        Err(e) => {
+            HTTP_REQUESTS_TOTAL
+                .with_label_values(&["POST", "/transfer/ingest/wallet", "500"])
+                .inc();
+
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": e.to_string(),
+            }))
+        }
+    }
+}
+
+/// POST /transfer/ingest/batch
+/// Ingest events for multiple wallets
+#[derive(Debug, Deserialize)]
+struct IngestBatchRequest {
+    wallets: Vec<String>,
+    #[serde(default)]
+    batch_size: Option<usize>,
+    #[serde(default)]
+    max_concurrent: Option<usize>,
+    #[serde(default)]
+    max_age_days: Option<u64>,
+}
+
+#[post("/ingest/batch")]
+async fn ingest_batch_events(
+    req: web::Json<IngestBatchRequest>,
+    state: web::Data<ApiState>,
+) -> HttpResponse {
+    let timer = Timer::new();
+
+    let config = IngestionConfig {
+        batch_size: req.batch_size.unwrap_or(100),
+        max_concurrent: req.max_concurrent.unwrap_or(5),
+        max_age_days: req.max_age_days.unwrap_or(30),
+        ..Default::default()
+    };
+
+    let worker = EventIngestionWorker::new(
+        state.db_manager.clone(),
+        state.rpc_client.clone(),
+        state.transaction_handler.clone(),
+        state.transfer_analytics.clone(),
+        config,
+    );
+
+    match worker.ingest_wallets(req.wallets.clone()).await {
+        Ok(stats) => {
+            HTTP_REQUESTS_TOTAL
+                .with_label_values(&["POST", "/transfer/ingest/batch", "200"])
+                .inc();
+            HTTP_REQUEST_DURATION
+                .with_label_values(&["POST", "/transfer/ingest/batch"])
+                .observe(timer.elapsed_secs());
+
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "wallets_processed": req.wallets.len(),
+                "stats": {
+                    "wallets_success": stats.wallets_success,
+                    "wallets_failed": stats.wallets_failed,
+                    "total_signatures": stats.total_signatures,
+                    "ingested_ok": stats.ingested_ok,
+                    "ingested_failed": stats.ingested_failed,
+                    "parse_failed": stats.parse_failed,
+                    "skipped_duplicate": stats.skipped_duplicate,
+                },
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }))
+        }
+        Err(e) => {
+            HTTP_REQUESTS_TOTAL
+                .with_label_values(&["POST", "/transfer/ingest/batch", "500"])
+                .inc();
+
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": e.to_string(),
+            }))
+        }
+    }
+}
+
+/// POST /transfer/ingest/backfill
+/// Backfill events from wallet_relationships table
+#[derive(Debug, Deserialize)]
+struct BackfillRequest {
+    #[serde(default = "default_limit")]
+    limit: usize,
+    #[serde(default)]
+    batch_size: Option<usize>,
+    #[serde(default)]
+    max_concurrent: Option<usize>,
+}
+
+fn default_limit() -> usize {
+    100
+}
+
+#[post("/ingest/backfill")]
+async fn backfill_events(
+    req: web::Json<BackfillRequest>,
+    state: web::Data<ApiState>,
+) -> HttpResponse {
+    let timer = Timer::new();
+
+    let config = IngestionConfig {
+        batch_size: req.batch_size.unwrap_or(100),
+        max_concurrent: req.max_concurrent.unwrap_or(5),
+        ..Default::default()
+    };
+
+    let worker = EventIngestionWorker::new(
+        state.db_manager.clone(),
+        state.rpc_client.clone(),
+        state.transaction_handler.clone(),
+        state.transfer_analytics.clone(),
+        config,
+    );
+
+    match worker.backfill_from_relationships(req.limit).await {
+        Ok(stats) => {
+            HTTP_REQUESTS_TOTAL
+                .with_label_values(&["POST", "/transfer/ingest/backfill", "200"])
+                .inc();
+            HTTP_REQUEST_DURATION
+                .with_label_values(&["POST", "/transfer/ingest/backfill"])
+                .observe(timer.elapsed_secs());
+
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "stats": {
+                    "wallets_success": stats.wallets_success,
+                    "wallets_failed": stats.wallets_failed,
+                    "total_signatures": stats.total_signatures,
+                    "ingested_ok": stats.ingested_ok,
+                    "ingested_failed": stats.ingested_failed,
+                    "parse_failed": stats.parse_failed,
+                    "skipped_duplicate": stats.skipped_duplicate,
+                },
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }))
+        }
+        Err(e) => {
+            HTTP_REQUESTS_TOTAL
+                .with_label_values(&["POST", "/transfer/ingest/backfill", "500"])
+                .inc();
+
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": e.to_string(),
+            }))
+        }
+    }
+}
+
 /// Configure transfer analytics routes
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -219,6 +431,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(get_wallet_transfer_stats)
             .service(get_transaction_summary)
             .service(batch_analyze_transfers)
-            .service(get_top_transfers),
+            .service(get_top_transfers)
+            .service(ingest_wallet_events)
+            .service(ingest_batch_events)
+            .service(backfill_events),
     );
 }
