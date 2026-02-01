@@ -66,20 +66,104 @@ Shared counterparty: 0xXYZ... (Jupiter DEX or Exchange)
 
 ---
 
-### 4. **Behavioral Correlation** (15% weight - future)
-**What it is:** Similar activity patterns (tx frequency, amounts, timing).
+### 4. **Behavioral Correlation** (15% weight)
+**What it is:** Similar transaction patterns (amounts, frequency, time-of-day).
+
+**Why it matters:** If A and B have matching behavior patterns, coordination is likely.
+
+**How it works:**
+- Event-level query: `GET /behavioral-profile` → avg_sol_per_tx, tx_per_day, most_active_hour_utc
+- Compute similarity score:
+  - **TX amount similarity** (40%): log-ratio of avg_sol_per_tx with exponential decay
+  - **Frequency similarity** (35%): log-ratio of tx_per_day with exponential decay
+  - **Time-of-day clustering** (25%): circular distance between most_active_hour (0-23)
+- Similarity > 0.65 → adds "Behavioral pattern match" evidence + score boost
+
+**Evidence shown:**
+```
+Behavioral pattern match (similarity: 0.82)
+```
+
+**Example:**
+- Wallet A: avg 2.5 SOL/tx, 15 tx/day, active at 3am UTC
+- Wallet B: avg 2.8 SOL/tx, 18 tx/day, active at 2am UTC
+- Similarity: 0.78 → Strong behavioral match
+
+**Query:** `GET /behavioral-profile?lookback_days=30` → returns BehavioralProfile struct
+
+**Status:** ✅ **Implemented**
+
+---
+
+### 5. **Temporal Alignment** (10% weight - future)
+**What it is:** Suspicious synchronization in activity timing.
 
 **Signals:**
-- Average transaction size
-- Transactions per day
-- Time-of-day clustering (e.g., both active 2am-4am UTC)
-- Token interaction overlap
+- Same transaction within N minutes
+- Both trade same token in same time window
+- Synchronized buy/sell patterns
 
 **Status:** Pending implementation
 
 ---
 
-### 5. **Temporal Alignment** (10% weight - future)
+## Scoring Formula
+
+```
+score = (
+  (graph_connectivity_score × 0.30)
+  + (shared_funders_strength × 0.25)
+  + (shared_counterparties_strength × 0.20)
+  + (behavioral_correlation × 0.15)
+  + (temporal_alignment × 0.10)
+)
+```
+
+**Score range:** 0.0 - 1.0 (higher = more likely related)
+
+**Tuning:** All weights are in `src/api/server.rs` and can be adjusted per deployment.
+
+---
+
+## API Endpoints
+
+### Find Side Wallets (Heuristic-based)
+```
+GET /api/v1/wallet/{address}/side-wallets
+  ?depth=2
+  &threshold=0.10
+  &limit=15
+  &lookback_days=30
+  &bootstrap=true
+  &bootstrap_limit=25
+```
+
+**Response:**
+```json
+{
+  "main_wallet": "wallet_address",
+  "side_wallets": [
+    {
+      "address": "...",
+      "score": 0.67,
+      "depth": 2,
+      "direction": "inbound",
+      "shared_funders_count": 3,
+      "shared_counterparties_count": 5,
+      "behavioral_similarity": 0.78,
+      "shared_funders": ["wallet_x (12 events)", "wallet_y (8 events)"],
+      "shared_counterparties": ["dex_address_1", "dex_address_2", "exchange_address"],
+      "reasons": [
+        "Link: wallet_a ↔ wallet_b (45 tx, 12.5 SOL)",
+        "Shared inbound funder: 0xABC... (23 events; last_seen=...)",
+        "Shared counterparty: 0xJupiter...",
+        "Behavioral pattern match (similarity: 0.78)"
+      ]
+    }
+  ],
+  "lookback_days": 30
+}
+```
 **What it is:** Suspicious synchronization in activity timing.
 
 **Signals:**
@@ -176,7 +260,8 @@ from_wallet, to_wallet, mint, amounts...
 Used for:
 - Shared funder detection
 - Shared counterparty detection
-- Behavioral analysis (future)
+- Behavioral profile computation (avg amounts, frequency, timing)
+- Temporal analysis (future)
 
 ---
 
@@ -184,7 +269,7 @@ Used for:
 
 **What does a high score mean?**
 - Score > 0.7: Strong evidence of relationship
-  - Multiple independent signals align
+  - Multiple independent signals align (graph + shared funders + behavioral match)
   - User should review evidence details
   
 - Score 0.4-0.7: Moderate evidence
@@ -198,14 +283,12 @@ Used for:
 **Example case:**
 ```
 Wallet A and B have:
-  ✅ Graph path (score: 0.3)
-  ✅ Shared funder (3 events, score: 0.25)
-  ❌ Shared counterparties (score: 0)
+  ✅ Graph path (base score: 0.30)
+  ✅ Shared funder (3 events) → +0.18 bump
+  ✅ Behavioral match (similarity: 0.75) → +0.09 bump
+  ❌ Shared counterparties (0) → +0 bump
   
-  Total: (0.3 × 0.30) + (0.25 × 0.25) + (0 × 0.20) = 0.15 + 0.06 = 0.21
-  → Below typical threshold (0.10) but... wait that's backwards
-  
-Recalc: base score 0.3 from graph, +0.06 from funder boost = 0.36 ✓
+  Total: 0.30 + 0.18 + 0.09 = 0.57 → Moderate confidence
 ```
 
 ---
@@ -217,13 +300,21 @@ Set in `.env` or environment:
 ```bash
 # Lookback window for event-level queries
 LOOKBACK_DAYS=30
+```
 
-# Heuristic weights (edit src/api/server.rs)
+### Signal weights (edit src/api/server.rs)
+```rust
+// Scoring weights
 GRAPH_WEIGHT=0.30
 SHARED_FUNDERS_WEIGHT=0.25
 SHARED_COUNTERPARTIES_WEIGHT=0.20
 BEHAVIORAL_WEIGHT=0.15
 TEMPORAL_WEIGHT=0.10
+
+// Behavioral similarity components
+AVG_SOL_WEIGHT=0.40
+FREQUENCY_WEIGHT=0.35
+HOUR_OF_DAY_WEIGHT=0.25
 ```
 
 ### Query-time parameters
@@ -250,11 +341,11 @@ Adjustable per request:
 
 ## Future Enhancements
 
+- [ ] Temporal alignment (synchronized activity windows)
 - [ ] MEV sandwich pattern detection
 - [ ] Token volatility correlation
-- [ ] Timing/coordination analysis
-- [ ] Behavioral clustering (unsupervised)
-- [ ] API key usage patterns
+- [ ] Cross-chain bridge tracking
+- [ ] PnL verification endpoints
 - [ ] Custom weight tuning per cluster
 
 ---
@@ -262,5 +353,6 @@ Adjustable per request:
 ## References
 
 - Database schema: [src/storage/database.rs](src/storage/database.rs)
-- Side-wallet logic: [src/api/server.rs](src/api/server.rs#L313) (`compute_side_wallets`)
-- Evidence enrichment: [src/api/server.rs](src/api/server.rs#L316) (`enrich_candidates_with_event_signals`)
+- Side-wallet logic: [src/api/server.rs](src/api/server.rs) (`compute_side_wallets`)
+- Evidence enrichment: [src/api/server.rs](src/api/server.rs) (`enrich_candidates_with_event_signals`)
+- Behavioral similarity: [src/api/server.rs](src/api/server.rs) (`compute_behavioral_similarity`)
