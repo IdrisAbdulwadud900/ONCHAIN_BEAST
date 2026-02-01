@@ -501,7 +501,7 @@ impl DatabaseManager {
                     FROM transfer_events
                     WHERE to_wallet = $1
                       AND from_wallet IS NOT NULL
-                     AND COALESCE(block_time, 0) >= $3
+                      AND (block_time IS NULL OR block_time >= $3)
                     GROUP BY from_wallet
                  ),
                  b AS (
@@ -511,7 +511,7 @@ impl DatabaseManager {
                     FROM transfer_events
                     WHERE to_wallet = $2
                       AND from_wallet IS NOT NULL
-                     AND COALESCE(block_time, 0) >= $3
+                      AND (block_time IS NULL OR block_time >= $3)
                     GROUP BY from_wallet
                  )
                  SELECT a.from_wallet,
@@ -559,7 +559,7 @@ impl DatabaseManager {
                  WHERE (from_wallet = $1 OR to_wallet = $1)
                    AND from_wallet IS NOT NULL
                    AND to_wallet IS NOT NULL
-                                     AND COALESCE(block_time, 0) >= $2
+                   AND (block_time IS NULL OR block_time >= $2)
                  GROUP BY counterparty
                  ORDER BY cnt DESC
                  LIMIT $3",

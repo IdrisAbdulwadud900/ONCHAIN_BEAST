@@ -230,7 +230,7 @@ async fn get_wallet_cluster(bot: &Bot, chat_id: ChatId, wallet: &str) -> Respons
 
     // bootstrap=true so first-time users get data without manual ingestion.
     let url = format!(
-        "{}/api/v1/wallet/{}/cluster?bootstrap=true&bootstrap_limit=25&depth=2&threshold=0.10&limit=20&lookback_days=30",
+        "{}/api/v1/wallet/{}/cluster?bootstrap=true&bootstrap_limit=25&depth=2&threshold=0.10&limit=20",
         api_base(),
         wallet
     );
@@ -769,16 +769,16 @@ Depth: {} | Threshold: {:.2} | Lookback: {}d\nBootstrap ingested: {} tx\n\n",
             .get("direction")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let shared_funders = item
-            .get("shared_funders")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let shared_counterparties = item
-            .get("shared_counterparties")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
         let last_seen = item
             .get("last_seen_epoch")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let shared_funders = item
+            .get("shared_funders_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let shared_cps = item
+            .get("shared_counterparties_count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
         let last_seen_days = if last_seen > 0 {
@@ -807,8 +807,8 @@ Depth: {} | Threshold: {:.2} | Lookback: {}d\nBootstrap ingested: {} tx\n\n",
             } else {
                 "".to_string()
             },
-            if shared_funders > 0 || shared_counterparties > 0 {
-                format!(" | Funders: {} | Shared CP: {}", shared_funders, shared_counterparties)
+            if shared_funders > 0 || shared_cps > 0 {
+                format!(" | Shared: {} funders, {} cps", shared_funders, shared_cps)
             } else {
                 "".to_string()
             }
@@ -844,16 +844,12 @@ fn format_wallet_cluster(wallet: &str, data: &serde_json::Value) -> String {
         .get("connection_strength")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let lookback_days = data
-        .get("lookback_days")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(30);
 
     let mut text = format!(
         "🕸️ <b>Wallet Cluster</b>\n━━━━━━━━━━━━━━━━\n\n\
 <b>Primary:</b>\n<code>{}</code>\n\n\
-Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2} | Lookback: {}d\nBootstrap ingested: {} tx\n\n",
-        wallet, size, strength, depth, threshold, lookback_days, ingested
+Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2}\nBootstrap ingested: {} tx\n\n",
+        wallet, size, strength, depth, threshold, ingested
     );
 
     let Some(arr) = data.get("wallets").and_then(|v| v.as_array()) else {
@@ -884,14 +880,6 @@ Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2} | Lookback:
             .get("direction")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let shared_funders = item
-            .get("shared_funders")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let shared_counterparties = item
-            .get("shared_counterparties")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
         let last_seen = item
             .get("last_seen_epoch")
             .and_then(|v| v.as_u64())
@@ -911,7 +899,7 @@ Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2} | Lookback:
         };
 
         text.push_str(&format!(
-            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {} | Dir: {}{}{}\n",
+            "{}. <code>{}</code>\n   Score: {:.2} | Depth: {} | Dir: {}{}\n",
             i + 1,
             addr,
             score,
@@ -919,11 +907,6 @@ Cluster size: {} | Avg strength: {:.2}\nDepth: {} | Threshold: {:.2} | Lookback:
             dir,
             if last_seen > 0 {
                 format!(" | Last seen: {}d", last_seen_days)
-            } else {
-                "".to_string()
-            },
-            if shared_funders > 0 || shared_counterparties > 0 {
-                format!(" | Funders: {} | Shared CP: {}", shared_funders, shared_counterparties)
             } else {
                 "".to_string()
             }

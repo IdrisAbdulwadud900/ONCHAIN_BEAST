@@ -225,8 +225,8 @@ pub mod handlers {
         pub bootstrap: Option<bool>,
         /// Number of recent signatures to ingest when bootstrap=true
         pub bootstrap_limit: Option<u64>,
-        /// Lookback window for event-level heuristics (default 30 days)
-        pub lookback_days: Option<u64>,
+        /// How many days back to consider event-level evidence (transfer_events)
+        pub lookback_days: Option<u32>,
     }
 
     #[derive(Debug, Clone)]
@@ -241,8 +241,10 @@ pub mod handlers {
         first_seen_epoch: u64,
         last_seen_epoch: u64,
         direction: String,
-        shared_funders: u64,
-        shared_counterparties: u64,
+        shared_funders_count: u32,
+        shared_counterparties_count: u32,
+        shared_funders: Vec<String>,
+        shared_counterparties: Vec<String>,
     }
 
     fn clamp01(x: f64) -> f64 {
@@ -288,6 +290,115 @@ pub mod handlers {
         }
     }
 
+    fn since_epoch_from_days(lookback_days: u32) -> u64 {
+        let days = lookback_days.clamp(1, 365) as u64;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        now.saturating_sub(days.saturating_mul(86_400))
+    }
+
+    fn format_signal(wallet: &str, count: u64, last_seen_epoch: u64) -> String {
+        if last_seen_epoch > 0 {
+            format!("{} ({} events; last_seen={})", wallet, count, last_seen_epoch)
+        } else {
+            format!("{} ({} events)", wallet, count)
+        }
+    }
+
+    async fn enrich_candidates_with_event_signals(
+        state: &ApiState,
+        main_wallet: &str,
+        candidates: &mut [SideWalletCandidate],
+        lookback_days: u32,
+    ) {
+        let since_epoch = since_epoch_from_days(lookback_days);
+
+        // Precompute main wallet counterparties once.
+        let main_counterparties = match state
+            .db_manager
+            .get_top_counterparties(main_wallet, Some(since_epoch), 80)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "Event evidence unavailable (get_top_counterparties failed): {}",
+                    e
+                );
+                return;
+            }
+        };
+        let main_set: HashSet<String> = main_counterparties
+            .iter()
+            .map(|s| s.wallet.clone())
+            .collect();
+
+        for c in candidates.iter_mut() {
+            // Shared inbound funders: wallets that sent to both main and candidate.
+            match state
+                .db_manager
+                .get_shared_inbound_senders(main_wallet, &c.address, Some(since_epoch), 3)
+                .await
+            {
+                Ok(shared) => {
+                    c.shared_funders_count = shared.len() as u32;
+                    c.shared_funders = shared
+                        .iter()
+                        .map(|s| format_signal(&s.wallet, s.count, s.last_seen_epoch))
+                        .collect();
+                    for s in shared.iter().take(3) {
+                        if c.reasons.len() < 8 {
+                            c.reasons.push(format!(
+                                "Shared inbound funder: {}",
+                                format_signal(&s.wallet, s.count, s.last_seen_epoch)
+                            ));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("shared funders query failed: {}", e);
+                }
+            }
+
+            // Shared counterparties: intersection of top counterparties.
+            match state
+                .db_manager
+                .get_top_counterparties(&c.address, Some(since_epoch), 80)
+                .await
+            {
+                Ok(other) => {
+                    let mut shared_wallets: Vec<String> = other
+                        .iter()
+                        .map(|s| s.wallet.clone())
+                        .filter(|w| main_set.contains(w))
+                        .collect();
+                    shared_wallets.sort();
+                    shared_wallets.dedup();
+
+                    c.shared_counterparties_count = shared_wallets.len() as u32;
+                    c.shared_counterparties = shared_wallets.iter().take(3).cloned().collect();
+
+                    for w in shared_wallets.iter().take(3) {
+                        if c.reasons.len() < 8 {
+                            c.reasons
+                                .push(format!("Shared counterparty: {}", w));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("counterparty query failed: {}", e);
+                }
+            }
+
+            // Score bump from higher-signal evidence (kept small).
+            let bump = 0.06 * (c.shared_funders_count.min(3) as f64)
+                + 0.03 * (c.shared_counterparties_count.min(5) as f64);
+            c.score = clamp01(c.score + bump);
+        }
+    }
+
     fn build_reason(
         from: &str,
         to: &str,
@@ -316,18 +427,11 @@ pub mod handlers {
         max_depth: usize,
         threshold: f64,
         limit: usize,
-        lookback_days: u64,
+        lookback_days: u32,
     ) -> Result<Vec<SideWalletCandidate>, String> {
         let max_depth = max_depth.clamp(1, 5);
         let threshold = clamp01(threshold);
         let limit = limit.clamp(1, 100);
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let lookback_days = lookback_days.clamp(1, 365);
-        let since_epoch = now.saturating_sub(lookback_days * 86_400);
 
         // BFS over wallet_relationships graph.
         let mut queue: VecDeque<(String, usize, f64)> = VecDeque::new();
@@ -400,8 +504,10 @@ pub mod handlers {
                         first_seen_epoch: conn.first_seen_epoch,
                         last_seen_epoch: conn.last_seen_epoch,
                         direction: dir.clone(),
-                        shared_funders: 0,
-                        shared_counterparties: 0,
+                        shared_funders_count: 0,
+                        shared_counterparties_count: 0,
+                        shared_funders: Vec::new(),
+                        shared_counterparties: Vec::new(),
                     });
 
                 // Keep best score, but also accumulate evidence.
@@ -436,76 +542,16 @@ pub mod handlers {
             .into_values()
             .filter(|c| c.score >= threshold)
             .collect();
-
-        // Sort first by base graph score; we'll enrich top candidates.
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        results.truncate(limit);
 
-        // Event-level heuristics enrichment (best-effort):
-        // - shared inbound funders: wallets that funded both main & candidate
-        // - shared counterparties: overlap of top counterparties
-        let enrich_n = results.len().min(limit.saturating_mul(5).max(10));
+        // Enrich with higher-signal evidence from transfer_events when available.
+        enrich_candidates_with_event_signals(state, main_wallet, &mut results, lookback_days).await;
 
-        let main_top = state
-            .db_manager
-            .get_top_counterparties(main_wallet, Some(since_epoch), 200)
-            .await
-            .map_err(|e| format!("Failed top counterparties query (main): {}", e))?;
-        let main_set: HashSet<String> = main_top.into_iter().map(|s| s.wallet).collect();
-
-        for c in results.iter_mut().take(enrich_n) {
-            let shared_funders = state
-                .db_manager
-                .get_shared_inbound_senders(main_wallet, &c.address, Some(since_epoch), 5)
-                .await
-                .map_err(|e| format!("Failed shared funders query: {}", e))?;
-
-            let other_top = state
-                .db_manager
-                .get_top_counterparties(&c.address, Some(since_epoch), 200)
-                .await
-                .map_err(|e| format!("Failed top counterparties query (other): {}", e))?;
-            let overlap_cnt = other_top
-                .iter()
-                .filter(|s| main_set.contains(&s.wallet))
-                .count() as u64;
-
-            c.shared_funders = shared_funders.len() as u64;
-            c.shared_counterparties = overlap_cnt;
-
-            // Score bump: small but meaningful.
-            let funder_bump = clamp01((c.shared_funders as f64) / 3.0) * 0.12;
-            let counterparty_bump = clamp01((c.shared_counterparties as f64) / 10.0) * 0.08;
-            c.score = clamp01(c.score + funder_bump + counterparty_bump);
-
-            if c.reasons.len() < 5 {
-                if !shared_funders.is_empty() {
-                    let names = shared_funders
-                        .iter()
-                        .take(3)
-                        .map(|s| s.wallet.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    c.reasons.push(format!(
-                        "Shared inbound funders ({}): {}",
-                        shared_funders.len(),
-                        names
-                    ));
-                }
-            }
-
-            if c.reasons.len() < 5 && c.shared_counterparties > 0 {
-                c.reasons.push(format!(
-                    "Shared counterparties in last {}d: {}",
-                    lookback_days, c.shared_counterparties
-                ));
-            }
-        }
-
-        // Re-sort after enrichment and apply final limit.
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -744,7 +790,7 @@ pub mod handlers {
         let limit = query.limit.unwrap_or(15);
         let bootstrap = query.bootstrap.unwrap_or(true);
         let bootstrap_limit = query.bootstrap_limit.unwrap_or(25).min(100);
-        let lookback_days = query.lookback_days.unwrap_or(30);
+        let lookback_days = query.lookback_days.unwrap_or(30).clamp(1, 365);
 
         // Optional bootstrap: fetch recent signatures, parse transactions, and persist relationships.
         let mut ingested = 0usize;
@@ -813,6 +859,8 @@ pub mod handlers {
                         "first_seen_epoch": c.first_seen_epoch,
                         "last_seen_epoch": c.last_seen_epoch,
                         "direction": c.direction,
+                        "shared_funders_count": c.shared_funders_count,
+                        "shared_counterparties_count": c.shared_counterparties_count,
                         "shared_funders": c.shared_funders,
                         "shared_counterparties": c.shared_counterparties,
                         "reasons": c.reasons,
@@ -855,7 +903,7 @@ pub mod handlers {
         let limit = query.limit.unwrap_or(30);
         let bootstrap = query.bootstrap.unwrap_or(true);
         let bootstrap_limit = query.bootstrap_limit.unwrap_or(25).min(100);
-        let lookback_days = query.lookback_days.unwrap_or(30);
+        let lookback_days = query.lookback_days.unwrap_or(30).clamp(1, 365);
 
         // Optional bootstrap (same as side-wallet endpoint)
         let mut ingested = 0usize;
@@ -932,6 +980,8 @@ pub mod handlers {
                         "first_seen_epoch": c.first_seen_epoch,
                         "last_seen_epoch": c.last_seen_epoch,
                         "direction": c.direction,
+                        "shared_funders_count": c.shared_funders_count,
+                        "shared_counterparties_count": c.shared_counterparties_count,
                         "shared_funders": c.shared_funders,
                         "shared_counterparties": c.shared_counterparties,
                         "reasons": c.reasons,
