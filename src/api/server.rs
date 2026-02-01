@@ -124,6 +124,9 @@ pub async fn start_server(
         // Configure transfer analytics routes
         app = app.configure(crate::api::transfer_routes::configure);
 
+        // Configure swap query routes
+        app = app.configure(crate::api::swap_routes::configure);
+
         // Configure token metadata routes
         app = app.configure(crate::api::metadata_routes::configure);
 

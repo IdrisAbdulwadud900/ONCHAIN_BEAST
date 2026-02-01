@@ -588,6 +588,116 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Query swap events for a wallet
+    pub async fn get_wallet_swaps(
+        &self,
+        wallet: &str,
+        limit: i64,
+        offset: i64,
+    ) -> BeastResult<Vec<tokio_postgres::Row>> {
+        self.client
+            .query(
+                "SELECT signature, event_index, slot, block_time, wallet, dex_program, dex_name,
+                        token_in, amount_in, token_out, amount_out, price
+                 FROM swap_events
+                 WHERE wallet = $1
+                 ORDER BY block_time DESC
+                 LIMIT $2 OFFSET $3",
+                &[&wallet, &limit, &offset],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to query wallet swaps: {}", e)))
+    }
+
+    /// Query swap events for a token
+    pub async fn get_token_swaps(
+        &self,
+        token: &str,
+        limit: i64,
+        offset: i64,
+    ) -> BeastResult<Vec<tokio_postgres::Row>> {
+        self.client
+            .query(
+                "SELECT signature, event_index, slot, block_time, wallet, dex_program, dex_name,
+                        token_in, amount_in, token_out, amount_out, price
+                 FROM swap_events
+                 WHERE token_in = $1 OR token_out = $1
+                 ORDER BY block_time DESC
+                 LIMIT $2 OFFSET $3",
+                &[&token, &limit, &offset],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to query token swaps: {}", e)))
+    }
+
+    /// Get swap statistics for a wallet
+    pub async fn get_wallet_swap_stats(
+        &self,
+        wallet: &str,
+    ) -> BeastResult<(i64, i64, Vec<(String, i64)>, Option<i64>, Option<i64>)> {
+        // Total swaps
+        let total_row = self
+            .client
+            .query_one(
+                "SELECT COUNT(*) FROM swap_events WHERE wallet = $1",
+                &[&wallet],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to count swaps: {}", e)))?;
+        let total_swaps: i64 = total_row.get(0);
+
+        // Unique tokens (approximate - counts token_in and token_out separately)
+        let unique_row = self
+            .client
+            .query_one(
+                "SELECT COUNT(DISTINCT token_in) + COUNT(DISTINCT token_out)
+                 FROM swap_events WHERE wallet = $1",
+                &[&wallet],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to count unique tokens: {}", e)))?;
+        let unique_tokens: i64 = unique_row.get(0);
+
+        // DEX breakdown
+        let dex_rows = self
+            .client
+            .query(
+                "SELECT dex_name, COUNT(*) as swap_count
+                 FROM swap_events
+                 WHERE wallet = $1
+                 GROUP BY dex_name
+                 ORDER BY swap_count DESC",
+                &[&wallet],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get DEX breakdown: {}", e)))?;
+
+        let dex_breakdown: Vec<(String, i64)> = dex_rows
+            .iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect();
+
+        // Time range
+        let time_row = self
+            .client
+            .query_opt(
+                "SELECT MIN(block_time), MAX(block_time)
+                 FROM swap_events
+                 WHERE wallet = $1",
+                &[&wallet],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get time range: {}", e)))?;
+
+        let (first_swap, last_swap) = if let Some(row) = time_row {
+            (row.get(0), row.get(1))
+        } else {
+            (None, None)
+        };
+
+        Ok((total_swaps, unique_tokens, dex_breakdown, first_swap, last_swap))
+    }
+
     /// Find shared inbound funders (wallets that sent to both A and B)
     pub async fn get_shared_inbound_senders(
         &self,
