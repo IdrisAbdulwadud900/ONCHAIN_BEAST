@@ -749,6 +749,81 @@ impl DatabaseManager {
         }
     }
 
+    /// Detect temporal overlap between two wallets (synchronized activity)
+    pub async fn get_temporal_overlap(
+        &self,
+        wallet_a: &str,
+        wallet_b: &str,
+        since_epoch: Option<u64>,
+        time_window_minutes: u32,
+    ) -> BeastResult<TemporalOverlap> {
+        let since = since_epoch.unwrap_or(0) as i64;
+        let window_secs = (time_window_minutes.clamp(1, 60) * 60) as i64;
+
+        let row = self
+            .client
+            .query_one(
+                "WITH a_times AS (
+                    SELECT DISTINCT (block_time / $4)::BIGINT AS time_bucket
+                    FROM transfer_events
+                    WHERE (from_wallet = $1 OR to_wallet = $1)
+                      AND block_time IS NOT NULL
+                      AND block_time >= $3
+                ),
+                b_times AS (
+                    SELECT DISTINCT (block_time / $4)::BIGINT AS time_bucket
+                    FROM transfer_events
+                    WHERE (from_wallet = $2 OR to_wallet = $2)
+                      AND block_time IS NOT NULL
+                      AND block_time >= $3
+                ),
+                overlap AS (
+                    SELECT COUNT(*)::INTEGER AS overlap_count
+                    FROM a_times
+                    INNER JOIN b_times ON a_times.time_bucket = b_times.time_bucket
+                ),
+                same_block AS (
+                    SELECT COUNT(DISTINCT a.signature)::INTEGER AS same_block_count
+                    FROM transfer_events a
+                    INNER JOIN transfer_events b
+                        ON a.slot = b.slot
+                        AND a.signature != b.signature
+                    WHERE (a.from_wallet = $1 OR a.to_wallet = $1)
+                      AND (b.from_wallet = $2 OR b.to_wallet = $2)
+                      AND a.block_time >= $3
+                      AND b.block_time >= $3
+                )
+                SELECT
+                    COALESCE(o.overlap_count, 0)::INTEGER AS overlapping_minutes,
+                    (SELECT COUNT(*)::INTEGER FROM a_times) + (SELECT COUNT(*)::INTEGER FROM b_times) AS total_minutes,
+                    COALESCE(s.same_block_count, 0)::INTEGER AS same_block_count
+                FROM overlap o
+                CROSS JOIN same_block s",
+                &[&wallet_a, &wallet_b, &since, &window_secs],
+            )
+            .await
+            .map_err(|e| {
+                BeastError::DatabaseError(format!("Failed to get temporal overlap: {}", e))
+            })?;
+
+        let overlapping_minutes: i32 = row.get(0);
+        let total_minutes: i32 = row.get(1);
+        let same_block_count: i32 = row.get(2);
+
+        let overlap_ratio = if total_minutes > 0 {
+            (overlapping_minutes as f64) / (total_minutes as f64)
+        } else {
+            0.0
+        };
+
+        Ok(TemporalOverlap {
+            overlapping_minutes: overlapping_minutes as u32,
+            total_minutes_checked: total_minutes as u32,
+            overlap_ratio,
+            same_block_count: same_block_count as u32,
+        })
+    }
+
     /// Health check
     pub async fn health_check(&self) -> BeastResult<bool> {
         self.client
@@ -795,4 +870,12 @@ pub struct BehavioralProfile {
     pub most_active_hour_utc: Option<i32>,
     pub first_tx_epoch: u64,
     pub last_tx_epoch: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TemporalOverlap {
+    pub overlapping_minutes: u32,
+    pub total_minutes_checked: u32,
+    pub overlap_ratio: f64,
+    pub same_block_count: u32,
 }

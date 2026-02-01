@@ -246,6 +246,8 @@ pub mod handlers {
         shared_funders: Vec<String>,
         shared_counterparties: Vec<String>,
         behavioral_similarity: f64,
+        temporal_overlap_ratio: f64,
+        same_block_count: u32,
     }
 
     fn clamp01(x: f64) -> f64 {
@@ -488,6 +490,46 @@ pub mod handlers {
                 }
             }
         }
+
+        // Temporal alignment: detect synchronized activity windows
+        for c in candidates.iter_mut() {
+            match state
+                .db_manager
+                .get_temporal_overlap(main_wallet, &c.address, Some(since_epoch), 5)
+                .await
+            {
+                Ok(overlap) => {
+                    c.temporal_overlap_ratio = overlap.overlap_ratio;
+                    c.same_block_count = overlap.same_block_count;
+
+                    // Temporal signals: same-block txs (strong) or high time overlap (moderate)
+                    if overlap.same_block_count > 0 {
+                        if c.reasons.len() < 8 {
+                            c.reasons.push(format!(
+                                "Same-block activity ({} shared blocks)",
+                                overlap.same_block_count
+                            ));
+                        }
+                        // Same-block is very strong signal
+                        c.score = clamp01(c.score + 0.08 * (overlap.same_block_count.min(5) as f64 * 0.2));
+                    } else if overlap.overlap_ratio > 0.15 {
+                        if c.reasons.len() < 8 {
+                            c.reasons.push(format!(
+                                "Synchronized activity windows ({:.1}% overlap)",
+                                overlap.overlap_ratio * 100.0
+                            ));
+                        }
+                        // High temporal overlap
+                        c.score = clamp01(c.score + overlap.overlap_ratio * 0.10);
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("temporal overlap query failed for {}: {}", c.address, e);
+                    c.temporal_overlap_ratio = 0.0;
+                    c.same_block_count = 0;
+                }
+            }
+        }
     }
 
     fn build_reason(
@@ -600,6 +642,8 @@ pub mod handlers {
                         shared_funders: Vec::new(),
                         shared_counterparties: Vec::new(),
                         behavioral_similarity: 0.0,
+                        temporal_overlap_ratio: 0.0,
+                        same_block_count: 0,
                     });
 
                 // Keep best score, but also accumulate evidence.
@@ -956,6 +1000,8 @@ pub mod handlers {
                         "shared_funders": c.shared_funders,
                         "shared_counterparties": c.shared_counterparties,
                         "behavioral_similarity": c.behavioral_similarity,
+                        "temporal_overlap_ratio": c.temporal_overlap_ratio,
+                        "same_block_count": c.same_block_count,
                         "reasons": c.reasons,
                     })).collect::<Vec<_>>(),
                     "confidence_threshold": threshold,
