@@ -1,5 +1,6 @@
 pub mod analysis_api_enhanced;
 pub mod analysis_routes;
+pub mod analytics_routes;
 pub mod handlers;
 pub mod metadata_routes;
 pub mod metrics_routes;

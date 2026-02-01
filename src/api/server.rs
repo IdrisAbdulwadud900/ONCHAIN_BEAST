@@ -80,6 +80,13 @@ pub async fn start_server(
         Arc::clone(&redis_cache),
     ));
 
+    // Initialize PnL engine
+    let pnl_engine = Arc::new(crate::price::PnLEngine::new(
+        Arc::clone(&db_manager),
+        Arc::clone(&price_oracle),
+    ));
+    info!("✅ Initialized PnL calculation engine");
+
     let state = web::Data::new(ApiState {
         rpc_client,
         database,
@@ -109,6 +116,7 @@ pub async fn start_server(
             .app_data(web::Data::new(Arc::clone(&db_manager)))
             .app_data(web::Data::new(Arc::clone(&redis_cache)))
             .app_data(web::Data::new(Arc::clone(&price_oracle)))
+            .app_data(web::Data::new(Arc::clone(&pnl_engine)))
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
             .wrap(RequestId::new())
@@ -131,6 +139,9 @@ pub async fn start_server(
 
         // Configure price query routes
         app = app.configure(crate::api::price_routes::configure);
+
+        // Configure analytics routes (PnL, claims, leaderboards)
+        app = app.configure(crate::api::analytics_routes::configure);
 
         // Configure token metadata routes
         app = app.configure(crate::api::metadata_routes::configure);

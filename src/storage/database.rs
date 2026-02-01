@@ -896,6 +896,181 @@ impl DatabaseManager {
         Ok(row.get(0))
     }
 
+    // ===== Leaderboard & Analytics Methods =====
+
+    /// Get top performers by PnL
+    pub async fn get_top_performers(&self, limit: i64, token_mint: Option<&str>) -> BeastResult<Vec<serde_json::Value>> {
+        let token_filter = if let Some(token) = token_mint {
+            format!("AND (token_in = '{}' OR token_out = '{}')", token, token)
+        } else {
+            String::new()
+        };
+
+        let query = format!(
+            "SELECT 
+                wallet,
+                ROUND(SUM(pnl_usd)::numeric, 2) as total_pnl,
+                COUNT(*) as swap_count,
+                ROUND(AVG(pnl_usd)::numeric, 2) as avg_pnl,
+                SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_usd < 0 THEN 1 ELSE 0 END) as losses,
+                ROUND((SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END)::numeric / 
+                       NULLIF(COUNT(*), 0) * 100), 2) as win_rate
+             FROM swap_events
+             WHERE pnl_usd IS NOT NULL
+             {}
+             GROUP BY wallet
+             HAVING SUM(pnl_usd) > 0
+             ORDER BY total_pnl DESC
+             LIMIT {}",
+            token_filter, limit
+        );
+
+        let rows = self
+            .client
+            .query(&query, &[])
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get top performers: {}", e)))?;
+
+        let results: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|row| {
+                serde_json::json!({
+                    "wallet": row.get::<_, String>(0),
+                    "total_pnl": row.get::<_, f64>(1),
+                    "swap_count": row.get::<_, i64>(2),
+                    "avg_pnl": row.get::<_, f64>(3),
+                    "wins": row.get::<_, i64>(4),
+                    "losses": row.get::<_, i64>(5),
+                    "win_rate": row.get::<_, f64>(6),
+                })
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get most profitable tokens
+    pub async fn get_top_tokens(&self, limit: i64) -> BeastResult<Vec<serde_json::Value>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT 
+                    token_out,
+                    COUNT(*) as trade_count,
+                    ROUND(SUM(pnl_usd)::numeric, 2) as total_pnl,
+                    ROUND(AVG(pnl_usd)::numeric, 2) as avg_pnl,
+                    ROUND(MAX(pnl_usd)::numeric, 2) as best_trade
+                 FROM swap_events
+                 WHERE pnl_usd > 0
+                 GROUP BY token_out
+                 HAVING COUNT(*) > 3
+                 ORDER BY total_pnl DESC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get top tokens: {}", e)))?;
+
+        let results: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|row| {
+                serde_json::json!({
+                    "token_mint": row.get::<_, String>(0),
+                    "trade_count": row.get::<_, i64>(1),
+                    "total_pnl": row.get::<_, f64>(2),
+                    "avg_pnl": row.get::<_, f64>(3),
+                    "best_trade": row.get::<_, f64>(4),
+                })
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get recent big wins
+    pub async fn get_big_wins(&self, limit: i64) -> BeastResult<Vec<serde_json::Value>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT 
+                    signature,
+                    wallet,
+                    dex_name,
+                    token_in,
+                    token_out,
+                    ROUND(pnl_usd::numeric, 2) as pnl,
+                    block_time
+                 FROM swap_events
+                 WHERE pnl_usd > 100
+                 ORDER BY pnl_usd DESC, block_time DESC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get big wins: {}", e)))?;
+
+        let results: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|row| {
+                serde_json::json!({
+                    "signature": row.get::<_, String>(0),
+                    "wallet": row.get::<_, String>(1),
+                    "dex_name": row.get::<_, String>(2),
+                    "token_in": row.get::<_, String>(3),
+                    "token_out": row.get::<_, String>(4),
+                    "pnl_usd": row.get::<_, f64>(5),
+                    "block_time": row.get::<_, i64>(6),
+                })
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get win/loss statistics for a wallet
+    pub async fn get_win_loss_stats(&self, wallet: &str) -> BeastResult<serde_json::Value> {
+        let row = self
+            .client
+            .query_one(
+                "SELECT 
+                    COUNT(*) as total_swaps,
+                    SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN pnl_usd < 0 THEN 1 ELSE 0 END) as losses,
+                    SUM(CASE WHEN pnl_usd = 0 THEN 1 ELSE 0 END) as breakeven,
+                    ROUND((SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END)::numeric / 
+                           NULLIF(COUNT(*), 0) * 100), 2) as win_rate,
+                    ROUND(SUM(CASE WHEN pnl_usd > 0 THEN pnl_usd ELSE 0 END)::numeric, 2) as total_profit,
+                    ROUND(SUM(CASE WHEN pnl_usd < 0 THEN pnl_usd ELSE 0 END)::numeric, 2) as total_loss,
+                    ROUND(SUM(pnl_usd)::numeric, 2) as net_pnl,
+                    ROUND(AVG(CASE WHEN pnl_usd > 0 THEN pnl_usd END)::numeric, 2) as avg_win,
+                    ROUND(AVG(CASE WHEN pnl_usd < 0 THEN pnl_usd END)::numeric, 2) as avg_loss,
+                    ROUND(MAX(pnl_usd)::numeric, 2) as best_trade,
+                    ROUND(MIN(pnl_usd)::numeric, 2) as worst_trade
+                 FROM swap_events
+                 WHERE wallet = $1 AND pnl_usd IS NOT NULL",
+                &[&wallet],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get win/loss stats: {}", e)))?;
+
+        Ok(serde_json::json!({
+            "wallet": wallet,
+            "total_swaps": row.get::<_, i64>(0),
+            "wins": row.get::<_, i64>(1),
+            "losses": row.get::<_, i64>(2),
+            "breakeven": row.get::<_, i64>(3),
+            "win_rate": row.get::<_, f64>(4),
+            "total_profit": row.get::<_, f64>(5),
+            "total_loss": row.get::<_, f64>(6),
+            "net_pnl": row.get::<_, f64>(7),
+            "avg_win": row.get::<_, Option<f64>>(8),
+            "avg_loss": row.get::<_, Option<f64>>(9),
+            "best_trade": row.get::<_, Option<f64>>(10),
+            "worst_trade": row.get::<_, Option<f64>>(11),
+        }))
+    }
+
     /// Find shared inbound funders (wallets that sent to both A and B)
     pub async fn get_shared_inbound_senders(
         &self,
