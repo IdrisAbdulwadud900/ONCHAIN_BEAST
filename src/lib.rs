@@ -3,6 +3,7 @@ pub mod api;
 pub mod auth;
 pub mod cache;
 pub mod core;
+pub mod dex;
 pub mod database;
 pub mod graph;
 pub mod metrics;

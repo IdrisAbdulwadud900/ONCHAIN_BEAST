@@ -3,6 +3,7 @@ use crate::core::errors::BeastResult;
 /// Provides analytics and persistence for SOL and token transfers
 use crate::core::{EnhancedTransaction, SolTransfer, TokenTransfer};
 use crate::storage::{keys, DatabaseManager, RedisCache};
+use crate::dex::DexDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,6 +48,20 @@ impl TransferAnalytics {
     pub async fn analyze_transaction(&self, tx: &EnhancedTransaction) -> BeastResult<()> {
         // Store the transaction in database
         self.db_manager.store_transaction(tx).await?;
+
+        // Extract and store DEX swaps
+        let swaps = DexDecoder::extract_swaps(tx)?;
+        for (i, swap) in swaps.iter().enumerate() {
+            self.db_manager.store_swap_event(swap).await?;
+            tracing::debug!(
+                "Stored swap #{}: {} -> {} on {} (wallet: {})",
+                i,
+                swap.token_in,
+                swap.token_out,
+                swap.dex_program,
+                swap.wallet
+            );
+        }
 
         // Process SOL transfers
         for (i, transfer) in tx.sol_transfers.iter().enumerate() {

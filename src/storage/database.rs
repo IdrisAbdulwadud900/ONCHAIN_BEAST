@@ -203,6 +203,66 @@ impl DatabaseManager {
             .await
             .ok();
 
+        // Create swap_events table for DEX swap tracking
+        self.client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS swap_events (
+                    signature TEXT NOT NULL,
+                    event_index INT NOT NULL,
+                    slot BIGINT NOT NULL,
+                    block_time BIGINT NOT NULL,
+                    wallet TEXT NOT NULL,
+                    dex_program TEXT NOT NULL,
+                    dex_name TEXT NOT NULL,
+                    token_in TEXT NOT NULL,
+                    amount_in BIGINT NOT NULL,
+                    token_out TEXT NOT NULL,
+                    amount_out BIGINT NOT NULL,
+                    price DOUBLE PRECISION,
+                    min_amount_out BIGINT,
+                    pool_address TEXT,
+                    PRIMARY KEY (signature, event_index)
+                )",
+                &[],
+            )
+            .await
+            .ok();
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_swap_events_wallet ON swap_events(wallet)",
+                &[],
+            )
+            .await
+            .ok();
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_swap_events_token_in ON swap_events(token_in)",
+                &[],
+            )
+            .await
+            .ok();
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_swap_events_token_out ON swap_events(token_out)",
+                &[],
+            )
+            .await
+            .ok();
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_swap_events_block_time ON swap_events(block_time)",
+                &[],
+            )
+            .await
+            .ok();
+        self.client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_swap_events_dex ON swap_events(dex_program)",
+                &[],
+            )
+            .await
+            .ok();
+
         Ok(())
     }
 
@@ -475,6 +535,54 @@ impl DatabaseManager {
             .await
             .map_err(|e| {
                 BeastError::DatabaseError(format!("Failed to store token transfer event: {}", e))
+            })?;
+
+        Ok(())
+    }
+
+    /// Store a swap event from DEX (idempotent per signature+event_index)
+    pub async fn store_swap_event(&self, swap: &crate::dex::SwapEvent) -> BeastResult<()> {
+        self.client
+            .execute(
+                "INSERT INTO swap_events (
+                    signature,
+                    event_index,
+                    slot,
+                    block_time,
+                    wallet,
+                    dex_program,
+                    dex_name,
+                    token_in,
+                    amount_in,
+                    token_out,
+                    amount_out,
+                    price,
+                    min_amount_out,
+                    pool_address
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                 ON CONFLICT (signature, event_index) DO UPDATE SET
+                    amount_out = EXCLUDED.amount_out,
+                    price = EXCLUDED.price",
+                &[
+                    &swap.signature,
+                    &(swap.event_index as i32),
+                    &(swap.slot as i64),
+                    &(swap.block_time as i64),
+                    &swap.wallet,
+                    &swap.dex_program,
+                    &swap.dex_name,
+                    &swap.token_in,
+                    &(swap.amount_in as i64),
+                    &swap.token_out,
+                    &(swap.amount_out as i64),
+                    &swap.price,
+                    &swap.min_amount_out.map(|v| v as i64),
+                    &swap.pool_address,
+                ],
+            )
+            .await
+            .map_err(|e| {
+                BeastError::DatabaseError(format!("Failed to store swap event: {}", e))
             })?;
 
         Ok(())

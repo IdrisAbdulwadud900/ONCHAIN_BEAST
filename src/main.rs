@@ -4,6 +4,7 @@ mod auth;
 mod cache;
 mod core;
 mod database;
+mod dex;
 mod graph;
 mod metrics;
 mod middleware;
