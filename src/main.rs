@@ -9,6 +9,7 @@ mod graph;
 mod metrics;
 mod middleware;
 mod modules;
+mod price;
 mod storage;
 
 use core::config::Config;
@@ -136,6 +137,12 @@ async fn main() -> anyhow::Result<()> {
 
     info!("✅ Cache manager initialized");
 
+    // Initialize Jupiter price oracle (5-minute cache TTL)
+    let price_oracle = price::JupiterPriceOracle::new(300);
+    let price_oracle = Arc::new(price_oracle);
+
+    info!("✅ Jupiter price oracle initialized");
+
     // Initialize authentication with API keys
     if config.enable_auth && !config.api_keys.is_empty() {
         auth::init_api_keys(config.api_keys.clone());
@@ -168,6 +175,7 @@ async fn main() -> anyhow::Result<()> {
         cache_manager,
         db_manager,
         redis_cache,
+        price_oracle,
         &api_host,
         api_port,
     )

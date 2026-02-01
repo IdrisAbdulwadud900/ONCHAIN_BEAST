@@ -9,4 +9,5 @@ pub mod graph;
 pub mod metrics;
 pub mod middleware;
 pub mod modules;
+pub mod price;
 pub mod storage;

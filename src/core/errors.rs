@@ -23,6 +23,9 @@ pub enum BeastError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 }

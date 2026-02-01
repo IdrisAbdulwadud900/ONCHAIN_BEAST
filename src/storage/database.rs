@@ -698,6 +698,204 @@ impl DatabaseManager {
         Ok((total_swaps, unique_tokens, dex_breakdown, first_swap, last_swap))
     }
 
+    // ===== Price Storage Methods =====
+
+    /// Store token price
+    pub async fn store_token_price(
+        &self,
+        token_mint: &str,
+        price_usd: f64,
+        timestamp: i64,
+        source: &str,
+    ) -> BeastResult<()> {
+        self.client
+            .execute(
+                "INSERT INTO token_prices (token_mint, price_usd, timestamp_utc, source)
+                 VALUES ($1, $2, $3, $4)",
+                &[&token_mint, &price_usd, &timestamp, &source],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to store token price: {}", e)))?;
+        Ok(())
+    }
+
+    /// Get latest price for a token
+    pub async fn get_latest_price(&self, token_mint: &str) -> BeastResult<Option<(f64, i64)>> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT price_usd, timestamp_utc
+                 FROM token_prices
+                 WHERE token_mint = $1
+                 ORDER BY timestamp_utc DESC
+                 LIMIT 1",
+                &[&token_mint],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get latest price: {}", e)))?;
+
+        Ok(row.map(|r| (r.get(0), r.get(1))))
+    }
+
+    /// Get historical price at specific timestamp
+    pub async fn get_price_at(
+        &self,
+        token_mint: &str,
+        timestamp: i64,
+    ) -> BeastResult<Option<(f64, i64)>> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT price_usd, timestamp_utc
+                 FROM token_prices
+                 WHERE token_mint = $1 AND timestamp_utc <= $2
+                 ORDER BY timestamp_utc DESC
+                 LIMIT 1",
+                &[&token_mint, &timestamp],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get historical price: {}", e)))?;
+
+        Ok(row.map(|r| (r.get(0), r.get(1))))
+    }
+
+    /// Get price history for a token
+    pub async fn get_price_history(
+        &self,
+        token_mint: &str,
+        start_time: i64,
+        end_time: i64,
+    ) -> BeastResult<Vec<(f64, i64)>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT price_usd, timestamp_utc
+                 FROM token_prices
+                 WHERE token_mint = $1 AND timestamp_utc BETWEEN $2 AND $3
+                 ORDER BY timestamp_utc ASC",
+                &[&token_mint, &start_time, &end_time],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get price history: {}", e)))?;
+
+        Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    }
+
+    /// Update swap event with USD values
+    pub async fn update_swap_usd_values(
+        &self,
+        signature: &str,
+        price_usd_in: f64,
+        price_usd_out: f64,
+        value_usd_in: f64,
+        value_usd_out: f64,
+    ) -> BeastResult<()> {
+        let pnl_usd = value_usd_out - value_usd_in;
+
+        self.client
+            .execute(
+                "UPDATE swap_events
+                 SET price_usd_in = $2,
+                     price_usd_out = $3,
+                     value_usd_in = $4,
+                     value_usd_out = $5,
+                     pnl_usd = $6
+                 WHERE signature = $1",
+                &[
+                    &signature,
+                    &price_usd_in,
+                    &price_usd_out,
+                    &value_usd_in,
+                    &value_usd_out,
+                    &pnl_usd,
+                ],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to update swap USD values: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Get swaps with USD values for a wallet
+    pub async fn get_wallet_swaps_with_usd(
+        &self,
+        wallet: &str,
+        limit: Option<i64>,
+    ) -> BeastResult<Vec<serde_json::Value>> {
+        let limit_val = limit.unwrap_or(100);
+        let rows = self
+            .client
+            .query(
+                "SELECT signature, wallet, dex_name, token_in, token_out,
+                        amount_in, amount_out, block_time,
+                        price_usd_in, price_usd_out, value_usd_in, value_usd_out, pnl_usd
+                 FROM swap_events
+                 WHERE wallet = $1
+                 ORDER BY block_time DESC
+                 LIMIT $2",
+                &[&wallet, &limit_val],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to query swaps with USD: {}", e)))?;
+
+        let results: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|row| {
+                serde_json::json!({
+                    "signature": row.get::<_, String>(0),
+                    "wallet": row.get::<_, String>(1),
+                    "dex_name": row.get::<_, String>(2),
+                    "token_in": row.get::<_, String>(3),
+                    "token_out": row.get::<_, String>(4),
+                    "amount_in": row.get::<_, f64>(5),
+                    "amount_out": row.get::<_, f64>(6),
+                    "block_time": row.get::<_, i64>(7),
+                    "price_usd_in": row.get::<_, Option<f64>>(8),
+                    "price_usd_out": row.get::<_, Option<f64>>(9),
+                    "value_usd_in": row.get::<_, Option<f64>>(10),
+                    "value_usd_out": row.get::<_, Option<f64>>(11),
+                    "pnl_usd": row.get::<_, Option<f64>>(12),
+                })
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get cumulative PnL for a wallet
+    pub async fn get_wallet_pnl(&self, wallet: &str) -> BeastResult<f64> {
+        let row = self
+            .client
+            .query_one(
+                "SELECT COALESCE(SUM(pnl_usd), 0.0)
+                 FROM swap_events
+                 WHERE wallet = $1 AND pnl_usd IS NOT NULL",
+                &[&wallet],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get wallet PnL: {}", e)))?;
+
+        Ok(row.get(0))
+    }
+
+    /// Get PnL for a wallet on a specific token
+    pub async fn get_wallet_token_pnl(&self, wallet: &str, token: &str) -> BeastResult<f64> {
+        let row = self
+            .client
+            .query_one(
+                "SELECT COALESCE(SUM(pnl_usd), 0.0)
+                 FROM swap_events
+                 WHERE wallet = $1 
+                   AND (token_in = $2 OR token_out = $2)
+                   AND pnl_usd IS NOT NULL",
+                &[&wallet, &token],
+            )
+            .await
+            .map_err(|e| BeastError::DatabaseError(format!("Failed to get wallet-token PnL: {}", e)))?;
+
+        Ok(row.get(0))
+    }
+
     /// Find shared inbound funders (wallets that sent to both A and B)
     pub async fn get_shared_inbound_senders(
         &self,

@@ -43,6 +43,7 @@ pub async fn start_server(
     cache: Arc<CacheManager>,
     db_manager: Arc<DatabaseManager>,
     redis_cache: Arc<RedisCache>,
+    price_oracle: Arc<crate::price::JupiterPriceOracle>,
     host: &str,
     port: u16,
 ) -> std::io::Result<()> {
@@ -107,6 +108,7 @@ pub async fn start_server(
             // Expose raw shared services for route modules that use Data<Arc<T>> directly.
             .app_data(web::Data::new(Arc::clone(&db_manager)))
             .app_data(web::Data::new(Arc::clone(&redis_cache)))
+            .app_data(web::Data::new(Arc::clone(&price_oracle)))
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
             .wrap(RequestId::new())
@@ -126,6 +128,9 @@ pub async fn start_server(
 
         // Configure swap query routes
         app = app.configure(crate::api::swap_routes::configure);
+
+        // Configure price query routes
+        app = app.configure(crate::api::price_routes::configure);
 
         // Configure token metadata routes
         app = app.configure(crate::api::metadata_routes::configure);
