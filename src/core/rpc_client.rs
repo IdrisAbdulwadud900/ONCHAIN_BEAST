@@ -1,6 +1,7 @@
 /// Solana RPC Client wrapper for blockchain interactions
 use crate::core::errors::{BeastError, Result};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct SolanaRpcClient {
@@ -10,9 +11,17 @@ pub struct SolanaRpcClient {
 
 impl SolanaRpcClient {
     pub fn new(endpoint: String) -> Self {
+        // `reqwest::Client::new()` can read system proxy configuration on macOS.
+        // In sandboxed environments this can panic (SystemConfiguration returning NULL),
+        // so we explicitly disable proxy auto-detection.
+        let http_client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("Failed to build reqwest client");
+
         SolanaRpcClient {
             endpoint,
-            http_client: reqwest::Client::new(),
+            http_client,
         }
     }
 
@@ -139,48 +148,83 @@ impl SolanaRpcClient {
             ]
         });
 
-        match self
-            .http_client
-            .post(&self.endpoint)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(response) => match response.json::<RpcResponse<TransactionData>>().await {
-                Ok(rpc_response) => {
-                    if let Some(tx_data) = rpc_response.result {
-                        let meta = tx_data.meta.as_ref();
-                        let fee = meta
-                            .and_then(|m| m.get("fee"))
-                            .and_then(|f| f.as_u64())
-                            .unwrap_or(0);
-                        let error = meta.and_then(|m| m.get("err")).map(|e| format!("{:?}", e));
-                        let success = error.is_none();
-
-                        Ok(RpcTransaction {
-                            signature: signature.to_string(),
-                            block_time: tx_data.block_time.unwrap_or(0),
-                            slot: tx_data.slot,
-                            fee,
-                            success,
-                            error,
-                            raw_data: serde_json::to_value(&tx_data)
-                                .unwrap_or(serde_json::Value::Null),
-                        })
-                    } else {
-                        Err(BeastError::RpcError("Transaction not found".to_string()))
+        // The public Solana RPC can occasionally return `result: null` for very recent
+        // transactions. A small retry helps avoid dropping most of the bootstrap set.
+        for attempt in 0..3 {
+            let resp = match self.http_client.post(&self.endpoint).json(&body).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt < 2 {
+                        tokio::time::sleep(Duration::from_millis(200 * (attempt + 1) as u64))
+                            .await;
+                        continue;
                     }
+                    return Err(BeastError::RpcError(format!(
+                        "Failed to get transaction: {}",
+                        e
+                    )));
                 }
-                Err(e) => Err(BeastError::RpcError(format!(
-                    "Failed to parse transaction response: {}",
-                    e
-                ))),
-            },
-            Err(e) => Err(BeastError::RpcError(format!(
-                "Failed to get transaction: {}",
-                e
-            ))),
+            };
+
+            let status = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| BeastError::RpcError(format!("Failed to read RPC response: {}", e)))?;
+
+            if !status.is_success() {
+                if attempt < 2 {
+                    tokio::time::sleep(Duration::from_millis(200 * (attempt + 1) as u64)).await;
+                    continue;
+                }
+                return Err(BeastError::RpcError(format!(
+                    "RPC HTTP {}: {}",
+                    status.as_u16(),
+                    text
+                )));
+            }
+
+            let rpc_response: RpcResponse<TransactionData> = serde_json::from_str(&text).map_err(|e| {
+                BeastError::RpcError(format!("Failed to parse transaction response: {}", e))
+            })?;
+
+            if let Some(err) = rpc_response.error {
+                // Surface the real JSON-RPC error instead of masking it as "not found".
+                return Err(BeastError::RpcError(format!(
+                    "RPC error {}: {}",
+                    err.code, err.message
+                )));
+            }
+
+            if let Some(tx_data) = rpc_response.result {
+                let meta = tx_data.meta.as_ref();
+                let fee = meta
+                    .and_then(|m| m.get("fee"))
+                    .and_then(|f| f.as_u64())
+                    .unwrap_or(0);
+                let error = meta.and_then(|m| m.get("err")).map(|e| format!("{:?}", e));
+                let success = error.is_none();
+
+                return Ok(RpcTransaction {
+                    signature: signature.to_string(),
+                    block_time: tx_data.block_time.unwrap_or(0),
+                    slot: tx_data.slot,
+                    fee,
+                    success,
+                    error,
+                    raw_data: serde_json::to_value(&tx_data).unwrap_or(serde_json::Value::Null),
+                });
+            }
+
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(200 * (attempt + 1) as u64)).await;
+                continue;
+            }
+
+            return Err(BeastError::RpcError("Transaction not found".to_string()));
         }
+
+        Err(BeastError::RpcError("Transaction not found".to_string()))
     }
 
     /// Check if RPC endpoint is healthy
@@ -311,7 +355,7 @@ struct AccountValue {
 struct SignatureData {
     signature: String,
     slot: u64,
-    #[serde(default)]
+    #[serde(default, rename = "blockTime")]
     block_time: Option<u64>,
     #[serde(default)]
     memo: Option<String>,
@@ -320,7 +364,7 @@ struct SignatureData {
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 struct TransactionData {
     slot: u64,
-    #[serde(default)]
+    #[serde(default, rename = "blockTime")]
     block_time: Option<u64>,
     #[serde(default)]
     meta: Option<serde_json::Value>,

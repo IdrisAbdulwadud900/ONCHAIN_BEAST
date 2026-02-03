@@ -1,7 +1,7 @@
 [Unit]
-Description=OnChain Beast - Solana Transaction Analyzer
-After=network.target postgresql.service redis.service
-Wants=postgresql.service redis.service
+Description=OnChain Beast - Side-Wallet Tracer (Solana)
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple

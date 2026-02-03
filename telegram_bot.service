@@ -1,5 +1,5 @@
 [Unit]
-Description=OnChain Beast - Telegram Bot
+Description=OnChain Beast - Side-Wallet Tracer (Telegram Bot)
 After=network.target onchain_beast.service
 Wants=onchain_beast.service
 

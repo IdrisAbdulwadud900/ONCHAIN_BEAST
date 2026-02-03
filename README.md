@@ -1,167 +1,64 @@
-# OnChain Beast 🚀
+# OnChain Beast
 
-A powerful Solana blockchain analysis engine designed to revolutionize onchain investigation.
+Side-wallet tracing for the Solana blockchain, exposed as a minimal REST API and a Telegram bot.
 
-## Overview
+This project ingests transfers for a wallet, builds a wallet relationship graph, and returns likely
+side-wallet candidates. It also includes a best-effort "CEX hop" heuristic to surface wallets that
+may have been funded after the target wallet sent assets to a centralized exchange (exchanges pool
+funds, so this is probabilistic and provided with evidence + confidence scores).
 
-**OnChain Beast** is a sophisticated tool for deep onchain analysis on the Solana blockchain. It helps investigators:
+## API
 
-- 🔗 **Find Connected Wallets**: Discover side wallets and alternate addresses belonging to the same entity
-- 🔍 **Track Fund Flows**: Follow funds even through exchange intermediaries
-- 📊 **Detect Patterns**: Identify behavioral signatures and suspicious activities (P&D, wash trading, etc.)
-- 🛡️ **Risk Assessment**: Evaluate wallet risk profiles with advanced heuristics
-- 🔐 **Mixer Detection**: Identify when wallets use exchanges as mixing services
+- `GET /health`
+- `GET /api/v1/wallet/{address}/side-wallets`
 
-## Architecture
+Query params for `side-wallets`:
+- `bootstrap=true|false` (default: `true`) - ingest recent txs for the target wallet first
+- `bootstrap_limit=25` - how many signatures to ingest for the target wallet
+- `depth=2` - relationship graph expansion depth
+- `threshold=0.10` - minimum score
+- `limit=15` - max candidates returned
+- `lookback_days=30` - event-evidence window
+- `cex_hops=true|false` (default: `true`) - enable CEX-hop heuristic
+- `cex_bootstrap_limit=15` - extra ingestion for intermediary wallets (deposit/hot wallets)
 
-```
-src/
-├── main.rs              # Application entry point
-├── modules/             # Core analysis modules
-│   ├── wallet_tracker.rs       # Wallet clustering & relationship detection
-│   ├── transaction_analyzer.rs # Transaction-level analysis
-│   ├── pattern_detector.rs     # Behavioral pattern recognition
-│   └── exchange_detector.rs    # Exchange interaction tracking
-├── core/                # Core infrastructure
-│   ├── rpc_client.rs    # Solana RPC interactions
-│   ├── config.rs        # Configuration management
-│   └── errors.rs        # Error types
-├── database/            # Data persistence
-│   └── storage.rs       # Database operations
-├── api/                 # API handlers
-│   ├── handlers.rs      # Request handlers
-│   └── responses.rs     # Response types
-└── analysis/            # Analysis engine orchestration
-    └── mod.rs           # Main analysis pipeline
-```
+## Running
 
-## Key Features
+Requirements:
+- Rust toolchain
+- PostgreSQL (optional — see `DATABASE_URL=memory` below)
 
-### 1. **Wallet Tracker**
-- Identifies connected wallets through temporal and behavioral analysis
-- Builds wallet relationship graphs
-- Clusters wallets likely belonging to the same entity
+Environment variables:
+- `SOLANA_RPC_ENDPOINT` (default: Solana mainnet RPC)
+- `DATABASE_URL`
+  - `memory` (default) - in-memory, no Postgres required
+  - `postgresql://...` - persistent storage
+- `API_HOST` (default: `127.0.0.1`)
+- `API_PORT` (default: `8080`)
+- `API_KEYS` (optional, comma-separated). If set, requests must include `X-API-Key`.
 
-### 2. **Transaction Analyzer**
-- Deep transaction-level analysis
-- Fund flow tracking
-- Anomaly detection in transaction patterns
-
-### 3. **Pattern Detector**
-- Pump & dump detection
-- Wash trading identification
-- Behavioral fingerprinting
-- Similar wallet pattern matching
-
-### 4. **Exchange Detector**
-- Known exchange address database
-- Mixer behavior detection
-- Fund tracing through exchange wallets
-- Identifies withdrawal patterns
-
-## Setup
-
-### Prerequisites
-- Rust 1.93.0 or later
-- Solana CLI (optional, for additional tools)
-
-### Installation
-
+Start:
 ```bash
-cd onchain_beast
 cargo build --release
+./target/release/onchain_beast
 ```
 
-### Configuration
+## Telegram Bot
 
-Use the provided `.env.example` (recommended):
+Build:
 ```bash
-cp .env.example .env
+cargo build --release --bin telegram_bot
 ```
 
-Key settings (defaults shown):
-- `SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com`
-- `DATABASE_URL=postgresql://<user>@localhost/onchain_beast_personal`
-- `REDIS_URL=redis://127.0.0.1:6379`
-- `SERVER_HOST=127.0.0.1`
-- `SERVER_PORT=8080`
-
-### Running the API Server
-
+Run:
 ```bash
-./start.sh
-```
-
-Health check:
-```bash
-curl http://127.0.0.1:8080/health
-```
-
-## Usage Examples
-
-### Analyze a Wallet (API)
-
-```bash
-curl http://127.0.0.1:8080/analysis/wallet/<WALLET_ADDRESS>
-```
-
-### Wallet Stats (API)
-
-```bash
-curl http://127.0.0.1:8080/transfer/wallet-stats/<WALLET_ADDRESS>
-```
-
-### Token Metadata (API)
-
-```bash
-curl http://127.0.0.1:8080/metadata/token/<MINT_ADDRESS>
-```
-
-### Telegram Bot (Optional)
-
-```bash
-export TELEGRAM_BOT_TOKEN="<YOUR_TOKEN>"
-export ONCHAIN_BEAST_API_BASE="http://127.0.0.1:8080"  # optional
+export TELEGRAM_BOT_TOKEN="..."
+export ONCHAIN_BEAST_API_BASE="http://127.0.0.1:8080"
+export ONCHAIN_BEAST_API_KEY="..."   # only if API_KEYS is set on the server
 ./target/release/telegram_bot
 ```
 
-## Next Optional Enhancements
+## Important Note About CEX Hops
 
-- API authentication (JWT / API keys)
-- TLS/HTTPS termination
-- WebSocket streaming
-- Dashboard UI
-
-## Performance Characteristics
-
-- **Async/Await Runtime**: Full async support using Tokio
-- **Concurrent Analysis**: Process multiple wallets simultaneously
-- **Memory Efficient**: Optimized for large-scale blockchain data
-- **Type Safe**: Rust's type system prevents entire categories of bugs
-- **Zero-Cost Abstractions**: No runtime overhead from high-level constructs
-
-## Security
-
-- Memory safety guaranteed by Rust
-- No null pointer dereferences
-- No data races
-- All financial calculations use checked arithmetic
-
-## Contributing
-
-Contributions welcome! Please ensure:
-- Code passes `cargo fmt` and `cargo clippy`
-- All tests pass: `cargo test`
-- New features include documentation
-
-## License
-
-MIT
-
-## Contact & Support
-
-For questions or issues about OnChain Beast, please open an issue or reach out.
-
----
-
-**OnChain Beast** - Changing the game for onchain investigations 🚀
+Centralized exchanges aggregate and pool funds. The "CEX hop" results are heuristics and should be
+treated as investigative leads, not definitive attribution.
