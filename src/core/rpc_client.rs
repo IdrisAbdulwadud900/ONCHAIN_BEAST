@@ -374,5 +374,4 @@ struct TransactionData {
 
 #[derive(Debug, Deserialize)]
 struct NodeInfo {
-    pubkey: String,
 }

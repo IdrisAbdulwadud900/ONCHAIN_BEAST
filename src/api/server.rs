@@ -164,7 +164,7 @@ fn clamp01(x: f64) -> f64 {
     if x.is_nan() {
         return 0.0;
     }
-    x.max(0.0).min(1.0)
+    x.clamp(0.0, 1.0)
 }
 
 fn edge_score(tx_count: u32, total_sol: f64, total_token: u64) -> f64 {
@@ -256,7 +256,7 @@ fn compute_behavioral_similarity(profile_a: &BehavioralProfile, profile_b: &Beha
     // 3. Most active hour similarity (time-of-day clustering)
     let hour_sim = match (profile_a.most_active_hour_utc, profile_b.most_active_hour_utc) {
         (Some(h_a), Some(h_b)) => {
-            let diff = (h_a as i32 - h_b as i32).abs();
+            let diff = (h_a - h_b).abs();
             let circular_diff = diff.min(24 - diff);
             if circular_diff <= 2 {
                 1.0
@@ -526,7 +526,7 @@ async fn compute_cex_hops(
                     };
 
                     let ratio = withdraw_amount / deposit_amount;
-                    if ratio < 0.05 || ratio > 1.10 {
+                    if !(0.05..=1.10).contains(&ratio) {
                         continue;
                     }
 
