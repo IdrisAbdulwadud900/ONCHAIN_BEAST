@@ -48,6 +48,8 @@ impl SolanaRpcClient {
         // so we explicitly disable proxy auto-detection.
         let http_client = reqwest::Client::builder()
             .no_proxy()
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(25))
             .build()
             .expect("Failed to build reqwest client");
 
