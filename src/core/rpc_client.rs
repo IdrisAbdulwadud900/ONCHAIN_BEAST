@@ -1,12 +1,44 @@
 /// Solana RPC Client wrapper for blockchain interactions
 use crate::core::errors::{BeastError, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
+use tokio::time::{sleep, Instant};
 
 #[derive(Clone)]
 pub struct SolanaRpcClient {
     endpoint: String,
     http_client: reqwest::Client,
+    rate_limiter: Arc<RateLimiter>,
+    max_retries: usize,
+}
+
+struct RateLimiter {
+    min_interval: Duration,
+    next_allowed: Mutex<Instant>,
+}
+
+impl RateLimiter {
+    fn new(min_interval: Duration) -> Self {
+        Self {
+            min_interval,
+            next_allowed: Mutex::new(Instant::now()),
+        }
+    }
+
+    async fn acquire(&self) {
+        if self.min_interval.is_zero() {
+            return;
+        }
+
+        let mut next = self.next_allowed.lock().await;
+        let now = Instant::now();
+        if *next > now {
+            sleep(*next - now).await;
+        }
+        *next = Instant::now() + self.min_interval;
+    }
 }
 
 impl SolanaRpcClient {
@@ -19,9 +51,22 @@ impl SolanaRpcClient {
             .build()
             .expect("Failed to build reqwest client");
 
+        let min_interval_ms = std::env::var("RPC_MIN_INTERVAL_MS")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(120);
+
+        let max_retries = std::env::var("RPC_MAX_RETRIES")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(5)
+            .clamp(1, 15);
+
         SolanaRpcClient {
             endpoint,
             http_client,
+            rate_limiter: Arc::new(RateLimiter::new(Duration::from_millis(min_interval_ms))),
+            max_retries,
         }
     }
 
@@ -42,6 +87,7 @@ impl SolanaRpcClient {
             "params": [address, { "encoding": "jsonParsed" }]
         });
 
+        self.rate_limiter.acquire().await;
         match self
             .http_client
             .post(&self.endpoint)
@@ -96,40 +142,79 @@ impl SolanaRpcClient {
             "params": [address, { "limit": limit.min(1000) }]
         });
 
-        match self
-            .http_client
-            .post(&self.endpoint)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(response) => match response.json::<RpcResponse<Vec<SignatureData>>>().await {
-                Ok(rpc_response) => {
-                    if let Some(sigs) = rpc_response.result {
-                        let signatures = sigs
-                            .into_iter()
-                            .map(|sig_data| TransactionSignature {
-                                signature: sig_data.signature,
-                                slot: sig_data.slot,
-                                block_time: sig_data.block_time.unwrap_or(0),
-                                memo: sig_data.memo,
-                            })
-                            .collect();
-                        Ok(signatures)
-                    } else {
-                        Ok(vec![])
+        for attempt in 0..self.max_retries {
+            self.rate_limiter.acquire().await;
+
+            let resp = match self
+                .http_client
+                .post(&self.endpoint)
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt + 1 < self.max_retries {
+                        sleep(Duration::from_millis(200 * (attempt as u64 + 1))).await;
+                        continue;
                     }
+                    return Err(BeastError::RpcError(format!(
+                        "Failed to get signatures: {}",
+                        e
+                    )));
                 }
-                Err(e) => Err(BeastError::RpcError(format!(
-                    "Failed to parse signatures response: {}",
-                    e
-                ))),
-            },
-            Err(e) => Err(BeastError::RpcError(format!(
-                "Failed to get signatures: {}",
-                e
-            ))),
+            };
+
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| {
+                BeastError::RpcError(format!("Failed to read signatures response: {}", e))
+            })?;
+
+            if !status.is_success() {
+                if status.as_u16() == 429 && attempt + 1 < self.max_retries {
+                    // Exponential backoff capped at ~3s.
+                    let backoff = (250_u64 << attempt.min(4)).min(3_000);
+                    sleep(Duration::from_millis(backoff)).await;
+                    continue;
+                }
+                return Err(BeastError::RpcError(format!(
+                    "RPC HTTP {}: {}",
+                    status.as_u16(),
+                    text
+                )));
+            }
+
+            let rpc_response: RpcResponse<Vec<SignatureData>> =
+                serde_json::from_str(&text).map_err(|e| {
+                    BeastError::RpcError(format!("Failed to parse signatures response: {}", e))
+                })?;
+
+            if let Some(err) = rpc_response.error {
+                if err.code == 429 && attempt + 1 < self.max_retries {
+                    let backoff = (250_u64 << attempt.min(4)).min(3_000);
+                    sleep(Duration::from_millis(backoff)).await;
+                    continue;
+                }
+                return Err(BeastError::RpcError(format!(
+                    "RPC error {}: {}",
+                    err.code, err.message
+                )));
+            }
+
+            let sigs = rpc_response.result.unwrap_or_default();
+            let signatures = sigs
+                .into_iter()
+                .map(|sig_data| TransactionSignature {
+                    signature: sig_data.signature,
+                    slot: sig_data.slot,
+                    block_time: sig_data.block_time.unwrap_or(0),
+                    memo: sig_data.memo,
+                })
+                .collect();
+            return Ok(signatures);
         }
+
+        Ok(vec![])
     }
 
     /// Get full transaction details with enhanced data
@@ -149,14 +234,15 @@ impl SolanaRpcClient {
         });
 
         // The public Solana RPC can occasionally return `result: null` for very recent
-        // transactions. A small retry helps avoid dropping most of the bootstrap set.
-        for attempt in 0..3 {
+        // transactions and frequently rate-limits (`429`). We retry with backoff.
+        for attempt in 0..self.max_retries {
+            self.rate_limiter.acquire().await;
+
             let resp = match self.http_client.post(&self.endpoint).json(&body).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    if attempt < 2 {
-                        tokio::time::sleep(Duration::from_millis(200 * (attempt + 1) as u64))
-                            .await;
+                    if attempt + 1 < self.max_retries {
+                        sleep(Duration::from_millis(200 * (attempt as u64 + 1))).await;
                         continue;
                     }
                     return Err(BeastError::RpcError(format!(
@@ -173,8 +259,9 @@ impl SolanaRpcClient {
                 .map_err(|e| BeastError::RpcError(format!("Failed to read RPC response: {}", e)))?;
 
             if !status.is_success() {
-                if attempt < 2 {
-                    tokio::time::sleep(Duration::from_millis(200 * (attempt + 1) as u64)).await;
+                if status.as_u16() == 429 && attempt + 1 < self.max_retries {
+                    let backoff = (250_u64 << attempt.min(4)).min(3_000);
+                    sleep(Duration::from_millis(backoff)).await;
                     continue;
                 }
                 return Err(BeastError::RpcError(format!(
@@ -190,6 +277,11 @@ impl SolanaRpcClient {
 
             if let Some(err) = rpc_response.error {
                 // Surface the real JSON-RPC error instead of masking it as "not found".
+                if err.code == 429 && attempt + 1 < self.max_retries {
+                    let backoff = (250_u64 << attempt.min(4)).min(3_000);
+                    sleep(Duration::from_millis(backoff)).await;
+                    continue;
+                }
                 return Err(BeastError::RpcError(format!(
                     "RPC error {}: {}",
                     err.code, err.message
@@ -216,8 +308,8 @@ impl SolanaRpcClient {
                 });
             }
 
-            if attempt < 2 {
-                tokio::time::sleep(Duration::from_millis(200 * (attempt + 1) as u64)).await;
+            if attempt + 1 < self.max_retries {
+                sleep(Duration::from_millis(200 * (attempt as u64 + 1))).await;
                 continue;
             }
 
@@ -235,6 +327,7 @@ impl SolanaRpcClient {
             "method": "getHealth"
         });
 
+        self.rate_limiter.acquire().await;
         match self
             .http_client
             .post(&self.endpoint)
@@ -261,6 +354,7 @@ impl SolanaRpcClient {
             "method": "getClusterNodes"
         });
 
+        self.rate_limiter.acquire().await;
         match self
             .http_client
             .post(&self.endpoint)
