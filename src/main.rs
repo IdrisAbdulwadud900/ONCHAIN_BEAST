@@ -33,10 +33,26 @@ async fn main() -> anyhow::Result<()> {
 
     let rpc_client = Arc::new(SolanaRpcClient::new(rpc_endpoint));
 
-    let api_host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let api_port = std::env::var("API_PORT")
-        .unwrap_or_else(|_| "8080".to_string())
-        .parse::<u16>()?;
+    // Render (and some other PaaS) provide a required `PORT` env var. Prefer it if set.
+    // When running locally, default to 127.0.0.1:8080 unless overridden via API_HOST/API_PORT.
+    let render_port = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok());
+
+    let api_host = std::env::var("API_HOST").unwrap_or_else(|_| {
+        if render_port.is_some() {
+            "0.0.0.0".to_string()
+        } else {
+            "127.0.0.1".to_string()
+        }
+    });
+
+    let api_port = match render_port {
+        Some(p) => p,
+        None => std::env::var("API_PORT")
+            .unwrap_or_else(|_| "8080".to_string())
+            .parse::<u16>()?,
+    };
 
     api::start_server(rpc_client, db_manager, &api_host, api_port).await?;
     Ok(())

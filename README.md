@@ -58,6 +58,25 @@ export ONCHAIN_BEAST_API_KEY="..."   # only if API_KEYS is set on the server
 ./target/release/telegram_bot
 ```
 
+## Deploy on Render (24/7)
+
+This repo includes a `render.yaml` Blueprint that creates:
+- A Rust **web service** for the API
+- A Rust **worker** for the Telegram bot
+- A managed **Postgres** database
+
+Notes:
+- For true 24/7, use a paid Render plan. Free services can sleep.
+- Use a paid Solana RPC (Helius/QuickNode/etc.) to avoid `429` rate limits.
+
+Steps:
+1) In Render, create a **New Blueprint Instance** from this repo.
+2) Set env vars:
+   - `SOLANA_RPC_ENDPOINT` (API service): your RPC URL
+   - `TELEGRAM_BOT_TOKEN` (worker): your bot token (rotate if previously shared)
+   - `ONCHAIN_BEAST_API_BASE` (worker): the API service URL from Render (example: `https://<api-service>.onrender.com`)
+3) Optional: set `API_KEYS` on the API service and set `ONCHAIN_BEAST_API_KEY` on the worker to match.
+
 ## Important Note About CEX Hops
 
 Centralized exchanges aggregate and pool funds. The "CEX hop" results are heuristics and should be

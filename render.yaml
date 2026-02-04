@@ -1,0 +1,40 @@
+databases:
+  - name: onchain-beast-postgres
+    plan: starter
+
+services:
+  - name: onchain-beast-api
+    type: web
+    runtime: rust
+    plan: starter
+    autoDeploy: true
+    buildCommand: cargo build --release
+    startCommand: ./target/release/onchain_beast
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: SOLANA_RPC_ENDPOINT
+        sync: false
+      - key: API_KEYS
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: onchain-beast-postgres
+          property: connectionString
+
+  - name: onchain-beast-telegram-bot
+    type: worker
+    runtime: rust
+    plan: starter
+    autoDeploy: true
+    buildCommand: cargo build --release
+    startCommand: ./target/release/telegram_bot
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ONCHAIN_BEAST_API_BASE
+        sync: false
+      - key: ONCHAIN_BEAST_API_KEY
+        sync: false
