@@ -9,8 +9,7 @@ use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 
 fn api_base() -> String {
-    std::env::var("ONCHAIN_BEAST_API_BASE")
-        .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
+    std::env::var("ONCHAIN_BEAST_API_BASE").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
 
 fn api_key() -> Option<String> {
@@ -132,8 +131,11 @@ Tip: you can also paste a wallet address directly.";
             if looks_like_wallet(text) {
                 track_wallet(&bot, msg.chat.id, text).await?;
             } else {
-                bot.send_message(msg.chat.id, "Use /track <wallet> or paste a wallet. Send /help.")
-                    .await?;
+                bot.send_message(
+                    msg.chat.id,
+                    "Use /track <wallet> or paste a wallet. Send /help.",
+                )
+                .await?;
             }
         }
     }
@@ -168,7 +170,10 @@ async fn track_wallet(bot: &Bot, chat_id: ChatId, wallet: &str) -> ResponseResul
         .unwrap_or_default();
 
     let mut lines = Vec::new();
-    lines.push(format!("<b>Trace</b> for <code>{}</code>", short_addr(wallet)));
+    lines.push(format!(
+        "<b>Trace</b> for <code>{}</code>",
+        short_addr(wallet)
+    ));
 
     if !side_wallets.is_empty() {
         lines.push("\n<b>Direct / Graph Candidates</b>".to_string());
@@ -183,7 +188,10 @@ async fn track_wallet(bot: &Bot, chat_id: ChatId, wallet: &str) -> ResponseResul
             ));
         }
     } else {
-        lines.push("\n<b>Direct / Graph Candidates</b>\nNone yet (try again after ingesting more txs).".to_string());
+        lines.push(
+            "\n<b>Direct / Graph Candidates</b>\nNone yet (try again after ingesting more txs)."
+                .to_string(),
+        );
     }
 
     if !cex_wallets.is_empty() {

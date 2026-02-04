@@ -260,8 +260,7 @@ impl DatabaseManager {
             }
             DatabaseInner::Memory { state } => {
                 let mut mem = state.write().await;
-                mem.transactions
-                    .insert(tx.signature.clone(), tx.clone());
+                mem.transactions.insert(tx.signature.clone(), tx.clone());
                 Ok(())
             }
         }
@@ -299,15 +298,18 @@ impl DatabaseManager {
                 let now = now_epoch();
                 let mut mem = state.write().await;
                 let key = (from_wallet.to_string(), to_wallet.to_string());
-                let entry = mem.relationships.entry(key).or_insert_with(|| MemoryRelationship {
-                    from_wallet: from_wallet.to_string(),
-                    to_wallet: to_wallet.to_string(),
-                    sol_amount: 0.0,
-                    token_amount: 0,
-                    transaction_count: 0,
-                    first_seen_epoch: now,
-                    last_seen_epoch: now,
-                });
+                let entry = mem
+                    .relationships
+                    .entry(key)
+                    .or_insert_with(|| MemoryRelationship {
+                        from_wallet: from_wallet.to_string(),
+                        to_wallet: to_wallet.to_string(),
+                        sol_amount: 0.0,
+                        token_amount: 0,
+                        transaction_count: 0,
+                        first_seen_epoch: now,
+                        last_seen_epoch: now,
+                    });
 
                 entry.sol_amount += sol_amount;
                 entry.token_amount = entry.token_amount.saturating_add(token_amount);
@@ -656,7 +658,11 @@ impl DatabaseManager {
                         continue;
                     }
 
-                    let counterparty = if from == wallet { to.clone() } else { from.clone() };
+                    let counterparty = if from == wallet {
+                        to.clone()
+                    } else {
+                        from.clone()
+                    };
                     let last_seen = ev.block_time.unwrap_or(0).max(0) as u64;
                     let entry = agg.entry(counterparty).or_insert((0, 0));
                     entry.0 += 1;
@@ -770,15 +776,17 @@ impl DatabaseManager {
 
                 let mut out: Vec<WalletVolumeSignal> = agg
                     .into_iter()
-                    .map(|(wallet, (count, total_sol, total_token_ui, last_seen_epoch))| {
-                        WalletVolumeSignal {
-                            wallet,
-                            count,
-                            total_sol,
-                            total_token_ui,
-                            last_seen_epoch,
-                        }
-                    })
+                    .map(
+                        |(wallet, (count, total_sol, total_token_ui, last_seen_epoch))| {
+                            WalletVolumeSignal {
+                                wallet,
+                                count,
+                                total_sol,
+                                total_token_ui,
+                                last_seen_epoch,
+                            }
+                        },
+                    )
                     .collect();
 
                 out.sort_by(|a, b| {
@@ -946,7 +954,10 @@ impl DatabaseManager {
         }
     }
 
-    pub async fn get_wallet_connections(&self, wallet_address: &str) -> BeastResult<Vec<WalletConnection>> {
+    pub async fn get_wallet_connections(
+        &self,
+        wallet_address: &str,
+    ) -> BeastResult<Vec<WalletConnection>> {
         match &self.inner {
             DatabaseInner::Postgres { client } => {
                 let rows = client
@@ -988,7 +999,9 @@ impl DatabaseManager {
                 let mut out: Vec<WalletConnection> = mem
                     .relationships
                     .values()
-                    .filter(|rel| rel.from_wallet == wallet_address || rel.to_wallet == wallet_address)
+                    .filter(|rel| {
+                        rel.from_wallet == wallet_address || rel.to_wallet == wallet_address
+                    })
                     .map(|rel| WalletConnection {
                         from_wallet: rel.from_wallet.clone(),
                         to_wallet: rel.to_wallet.clone(),
@@ -1147,10 +1160,7 @@ impl DatabaseManager {
                 let sum: f64 = sol_amounts.iter().sum();
                 let avg_sol = sum / total_transfers as f64;
 
-                sol_amounts.sort_by(|a, b| {
-                    a.partial_cmp(b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                sol_amounts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
                 let median_sol = if sol_amounts.len() % 2 == 1 {
                     sol_amounts[sol_amounts.len() / 2]

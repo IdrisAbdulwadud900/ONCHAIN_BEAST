@@ -186,8 +186,8 @@ impl SolanaRpcClient {
                 )));
             }
 
-            let rpc_response: RpcResponse<Vec<SignatureData>> =
-                serde_json::from_str(&text).map_err(|e| {
+            let rpc_response: RpcResponse<Vec<SignatureData>> = serde_json::from_str(&text)
+                .map_err(|e| {
                     BeastError::RpcError(format!("Failed to parse signatures response: {}", e))
                 })?;
 
@@ -240,7 +240,13 @@ impl SolanaRpcClient {
         for attempt in 0..self.max_retries {
             self.rate_limiter.acquire().await;
 
-            let resp = match self.http_client.post(&self.endpoint).json(&body).send().await {
+            let resp = match self
+                .http_client
+                .post(&self.endpoint)
+                .json(&body)
+                .send()
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     if attempt + 1 < self.max_retries {
@@ -273,9 +279,10 @@ impl SolanaRpcClient {
                 )));
             }
 
-            let rpc_response: RpcResponse<TransactionData> = serde_json::from_str(&text).map_err(|e| {
-                BeastError::RpcError(format!("Failed to parse transaction response: {}", e))
-            })?;
+            let rpc_response: RpcResponse<TransactionData> =
+                serde_json::from_str(&text).map_err(|e| {
+                    BeastError::RpcError(format!("Failed to parse transaction response: {}", e))
+                })?;
 
             if let Some(err) = rpc_response.error {
                 // Surface the real JSON-RPC error instead of masking it as "not found".
@@ -469,5 +476,4 @@ struct TransactionData {
 }
 
 #[derive(Debug, Deserialize)]
-struct NodeInfo {
-}
+struct NodeInfo {}

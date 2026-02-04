@@ -214,7 +214,10 @@ fn since_epoch_from_days(lookback_days: u32) -> u64 {
 
 fn format_signal(wallet: &str, count: u64, last_seen_epoch: u64) -> String {
     if last_seen_epoch > 0 {
-        format!("{} ({} events; last_seen={})", wallet, count, last_seen_epoch)
+        format!(
+            "{} ({} events; last_seen={})",
+            wallet, count, last_seen_epoch
+        )
     } else {
         format!("{} ({} events)", wallet, count)
     }
@@ -222,15 +225,24 @@ fn format_signal(wallet: &str, count: u64, last_seen_epoch: u64) -> String {
 
 fn build_reason(from: &str, to: &str, tx_count: u32, total_sol: f64, total_token: u64) -> String {
     if total_sol > 0.0 {
-        format!("Link: {} <-> {} ({} tx, {:.4} SOL)", from, to, tx_count, total_sol)
+        format!(
+            "Link: {} <-> {} ({} tx, {:.4} SOL)",
+            from, to, tx_count, total_sol
+        )
     } else if total_token > 0 {
-        format!("Link: {} <-> {} ({} tx, {} token units)", from, to, tx_count, total_token)
+        format!(
+            "Link: {} <-> {} ({} tx, {} token units)",
+            from, to, tx_count, total_token
+        )
     } else {
         format!("Link: {} <-> {} ({} tx)", from, to, tx_count)
     }
 }
 
-fn compute_behavioral_similarity(profile_a: &BehavioralProfile, profile_b: &BehavioralProfile) -> f64 {
+fn compute_behavioral_similarity(
+    profile_a: &BehavioralProfile,
+    profile_b: &BehavioralProfile,
+) -> f64 {
     // Similarity based on transaction patterns (0.0 - 1.0)
 
     // 1. Average SOL amount similarity (normalize by log scale)
@@ -254,7 +266,10 @@ fn compute_behavioral_similarity(profile_a: &BehavioralProfile, profile_b: &Beha
     };
 
     // 3. Most active hour similarity (time-of-day clustering)
-    let hour_sim = match (profile_a.most_active_hour_utc, profile_b.most_active_hour_utc) {
+    let hour_sim = match (
+        profile_a.most_active_hour_utc,
+        profile_b.most_active_hour_utc,
+    ) {
         (Some(h_a), Some(h_b)) => {
             let diff = (h_a - h_b).abs();
             let circular_diff = diff.min(24 - diff);
@@ -322,7 +337,11 @@ async fn bootstrap_ingest_wallet(state: &ApiState, wallet: &str, limit: u64) -> 
         return stats;
     }
 
-    let sigs = match state.rpc_client.get_signatures(wallet, limit.min(100)).await {
+    let sigs = match state
+        .rpc_client
+        .get_signatures(wallet, limit.min(100))
+        .await
+    {
         Ok(s) => s,
         Err(e) => {
             tracing::debug!("bootstrap get_signatures failed for {}: {}", wallet, e);
@@ -336,7 +355,11 @@ async fn bootstrap_ingest_wallet(state: &ApiState, wallet: &str, limit: u64) -> 
     }
 
     for s in sigs {
-        match state.tx_handler.process_transaction(&s.signature, None).await {
+        match state
+            .tx_handler
+            .process_transaction(&s.signature, None)
+            .await
+        {
             Ok(tx) => {
                 stats.parsed_ok += 1;
                 if let Err(e) = state.transfer_analytics.analyze_transaction(&tx).await {
@@ -417,9 +440,8 @@ async fn compute_cex_hops(
 
         // Bootstrap deposit wallet so we can see sweeps in transfer_events.
         if bootstrapped_wallets.insert(deposit_wallet.clone()) {
-            bootstrap_stats.push(
-                bootstrap_ingest_wallet(state, &deposit_wallet, cex_bootstrap_limit).await,
-            );
+            bootstrap_stats
+                .push(bootstrap_ingest_wallet(state, &deposit_wallet, cex_bootstrap_limit).await);
         }
 
         for deposit_ev in deposit_events {
@@ -437,7 +459,12 @@ async fn compute_cex_hops(
             let sweep_window_end = deposit_time.saturating_add(SWEEP_WINDOW_SECS);
             let sweeps = match state
                 .db_manager
-                .get_outbound_transfers_in_window(&deposit_wallet, deposit_time, sweep_window_end, 400)
+                .get_outbound_transfers_in_window(
+                    &deposit_wallet,
+                    deposit_time,
+                    sweep_window_end,
+                    400,
+                )
                 .await
             {
                 Ok(v) => v,
@@ -554,8 +581,9 @@ async fn compute_cex_hops(
                         delta_seconds,
                     };
 
-                    let entry =
-                        agg.entry(recipient.clone()).or_insert_with(|| CexHopCandidate {
+                    let entry = agg
+                        .entry(recipient.clone())
+                        .or_insert_with(|| CexHopCandidate {
                             wallet: recipient.clone(),
                             score,
                             paths: Vec::new(),
@@ -571,7 +599,12 @@ async fn compute_cex_hops(
                     if entry.reasons.len() < 5 {
                         entry.reasons.push(format!(
                             "CEX hop: {} -> {} -> {} -> {} (dt={}s, score={:.2})",
-                            main_wallet, deposit_wallet, hot_wallet, recipient, delta_seconds, score
+                            main_wallet,
+                            deposit_wallet,
+                            hot_wallet,
+                            recipient,
+                            delta_seconds,
+                            score
                         ));
                     }
                 }
@@ -580,7 +613,11 @@ async fn compute_cex_hops(
     }
 
     let mut out: Vec<CexHopCandidate> = agg.into_values().collect();
-    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out.truncate(limit);
 
     (out, bootstrap_stats)
@@ -602,11 +639,17 @@ async fn enrich_candidates_with_event_signals(
     {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("Event evidence unavailable (get_top_counterparties failed): {}", e);
+            tracing::warn!(
+                "Event evidence unavailable (get_top_counterparties failed): {}",
+                e
+            );
             return;
         }
     };
-    let main_set: HashSet<String> = main_counterparties.iter().map(|s| s.wallet.clone()).collect();
+    let main_set: HashSet<String> = main_counterparties
+        .iter()
+        .map(|s| s.wallet.clone())
+        .collect();
 
     for c in candidates.iter_mut() {
         match state
@@ -713,10 +756,13 @@ async fn enrich_candidates_with_event_signals(
 
                 if overlap.same_block_count > 0 {
                     if c.reasons.len() < 8 {
-                        c.reasons
-                            .push(format!("Same-block activity ({} shared blocks)", overlap.same_block_count));
+                        c.reasons.push(format!(
+                            "Same-block activity ({} shared blocks)",
+                            overlap.same_block_count
+                        ));
                     }
-                    c.score = clamp01(c.score + 0.08 * (overlap.same_block_count.min(5) as f64 * 0.2));
+                    c.score =
+                        clamp01(c.score + 0.08 * (overlap.same_block_count.min(5) as f64 * 0.2));
                 } else if overlap.overlap_ratio > 0.15 {
                     if c.reasons.len() < 8 {
                         c.reasons.push(format!(
@@ -774,7 +820,11 @@ async fn compute_side_wallets(
                 continue;
             }
 
-            let mut s = edge_score(conn.transaction_count, conn.total_sol_transferred, conn.total_token_transferred);
+            let mut s = edge_score(
+                conn.transaction_count,
+                conn.total_sol_transferred,
+                conn.total_token_transferred,
+            );
 
             // Penalize very weak, single-touch relationships.
             if conn.transaction_count <= 1
@@ -793,27 +843,35 @@ async fn compute_side_wallets(
             }
 
             let dir = direction_label(&current, from, to);
-            let reason = build_reason(from, to, conn.transaction_count, conn.total_sol_transferred, conn.total_token_transferred);
+            let reason = build_reason(
+                from,
+                to,
+                conn.transaction_count,
+                conn.total_sol_transferred,
+                conn.total_token_transferred,
+            );
 
-            let entry = best.entry(other.to_string()).or_insert_with(|| SideWalletCandidate {
-                address: other.to_string(),
-                score: combined,
-                depth: depth + 1,
-                reasons: Vec::new(),
-                tx_count: conn.transaction_count,
-                total_sol: conn.total_sol_transferred,
-                total_token: conn.total_token_transferred,
-                first_seen_epoch: conn.first_seen_epoch,
-                last_seen_epoch: conn.last_seen_epoch,
-                direction: dir.clone(),
-                shared_funders_count: 0,
-                shared_counterparties_count: 0,
-                shared_funders: Vec::new(),
-                shared_counterparties: Vec::new(),
-                behavioral_similarity: 0.0,
-                temporal_overlap_ratio: 0.0,
-                same_block_count: 0,
-            });
+            let entry = best
+                .entry(other.to_string())
+                .or_insert_with(|| SideWalletCandidate {
+                    address: other.to_string(),
+                    score: combined,
+                    depth: depth + 1,
+                    reasons: Vec::new(),
+                    tx_count: conn.transaction_count,
+                    total_sol: conn.total_sol_transferred,
+                    total_token: conn.total_token_transferred,
+                    first_seen_epoch: conn.first_seen_epoch,
+                    last_seen_epoch: conn.last_seen_epoch,
+                    direction: dir.clone(),
+                    shared_funders_count: 0,
+                    shared_counterparties_count: 0,
+                    shared_funders: Vec::new(),
+                    shared_counterparties: Vec::new(),
+                    behavioral_similarity: 0.0,
+                    temporal_overlap_ratio: 0.0,
+                    same_block_count: 0,
+                });
 
             if combined > entry.score {
                 entry.score = combined;
@@ -828,7 +886,10 @@ async fn compute_side_wallets(
 
             if entry.reasons.len() < 5 {
                 if conn.last_seen_epoch > 0 {
-                    entry.reasons.push(format!("{} ({}; last_seen={})", reason, dir, conn.last_seen_epoch));
+                    entry.reasons.push(format!(
+                        "{} ({}; last_seen={})",
+                        reason, dir, conn.last_seen_epoch
+                    ));
                 } else {
                     entry.reasons.push(format!("{} ({})", reason, dir));
                 }
@@ -841,13 +902,24 @@ async fn compute_side_wallets(
         }
     }
 
-    let mut results: Vec<SideWalletCandidate> = best.into_values().filter(|c| c.score >= threshold).collect();
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let mut results: Vec<SideWalletCandidate> = best
+        .into_values()
+        .filter(|c| c.score >= threshold)
+        .collect();
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
 
     enrich_candidates_with_event_signals(state, main_wallet, &mut results, lookback_days).await;
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
 
     Ok(results)
@@ -882,17 +954,27 @@ async fn find_side_wallets(
     let mut bootstrap_errors: Vec<String> = Vec::new();
 
     if bootstrap {
-        match state.rpc_client.get_signatures(&wallet, bootstrap_limit).await {
+        match state
+            .rpc_client
+            .get_signatures(&wallet, bootstrap_limit)
+            .await
+        {
             Ok(sigs) => {
                 bootstrap_stats.signatures = sigs.len();
                 for s in sigs {
-                    match state.tx_handler.process_transaction(&s.signature, None).await {
+                    match state
+                        .tx_handler
+                        .process_transaction(&s.signature, None)
+                        .await
+                    {
                         Ok(tx) => {
                             bootstrap_stats.parsed_ok += 1;
-                            if let Err(e) = state.transfer_analytics.analyze_transaction(&tx).await {
+                            if let Err(e) = state.transfer_analytics.analyze_transaction(&tx).await
+                            {
                                 bootstrap_stats.persisted_failed += 1;
                                 if bootstrap_errors.len() < 3 {
-                                    bootstrap_errors.push(format!("persist {}: {}", s.signature, e));
+                                    bootstrap_errors
+                                        .push(format!("persist {}: {}", s.signature, e));
                                 }
                             }
                         }
@@ -912,14 +994,15 @@ async fn find_side_wallets(
         }
     }
 
-    let candidates = match compute_side_wallets(&state, &wallet, depth, threshold, limit, lookback_days).await {
-        Ok(v) => v,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(json!({
-                "error": e
-            }));
-        }
-    };
+    let candidates =
+        match compute_side_wallets(&state, &wallet, depth, threshold, limit, lookback_days).await {
+            Ok(v) => v,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(json!({
+                    "error": e
+                }));
+            }
+        };
 
     let (cex_candidates, cex_bootstrap) = if cex_hops {
         compute_cex_hops(&state, &wallet, lookback_days, cex_bootstrap_limit, 10).await
@@ -962,7 +1045,12 @@ mod tests {
             .as_secs()
     }
 
-    fn sol_transfer(from: &str, to: &str, amount_sol: f64, instruction_index: usize) -> SolTransfer {
+    fn sol_transfer(
+        from: &str,
+        to: &str,
+        amount_sol: f64,
+        instruction_index: usize,
+    ) -> SolTransfer {
         SolTransfer {
             from: from.to_string(),
             to: to.to_string(),
@@ -973,7 +1061,12 @@ mod tests {
         }
     }
 
-    fn tx(signature: &str, slot: u64, block_time: u64, sol_transfers: Vec<SolTransfer>) -> EnhancedTransaction {
+    fn tx(
+        signature: &str,
+        slot: u64,
+        block_time: u64,
+        sol_transfers: Vec<SolTransfer>,
+    ) -> EnhancedTransaction {
         EnhancedTransaction {
             signature: signature.to_string(),
             slot,
@@ -1031,8 +1124,16 @@ mod tests {
         let tx_a = tx("sig_main_side1", 1, now - 3600, transfers_a);
         let tx_b = tx("sig_side1_side2", 2, now - 3500, transfers_b);
 
-        state.transfer_analytics.analyze_transaction(&tx_a).await.unwrap();
-        state.transfer_analytics.analyze_transaction(&tx_b).await.unwrap();
+        state
+            .transfer_analytics
+            .analyze_transaction(&tx_a)
+            .await
+            .unwrap();
+        state
+            .transfer_analytics
+            .analyze_transaction(&tx_b)
+            .await
+            .unwrap();
 
         let candidates = compute_side_wallets(&state, main, 2, 0.10, 25, 30)
             .await
@@ -1081,7 +1182,11 @@ mod tests {
             .analyze_transaction(&tx_deposit)
             .await
             .unwrap();
-        state.transfer_analytics.analyze_transaction(&tx_sweep).await.unwrap();
+        state
+            .transfer_analytics
+            .analyze_transaction(&tx_sweep)
+            .await
+            .unwrap();
         state
             .transfer_analytics
             .analyze_transaction(&tx_withdraw)
@@ -1096,7 +1201,9 @@ mod tests {
 
         assert!(cand.score > 0.1);
         assert!(
-            cand.paths.iter().any(|p| p.deposit_wallet == deposit && p.hot_wallet == hot),
+            cand.paths
+                .iter()
+                .any(|p| p.deposit_wallet == deposit && p.hot_wallet == hot),
             "expected path via deposit/hot; got {:?}",
             cand.paths
         );
